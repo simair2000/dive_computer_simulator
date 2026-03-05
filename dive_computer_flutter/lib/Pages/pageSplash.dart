@@ -40,7 +40,7 @@ class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
                     height: 50,
                     child: Text('START').color(Colors.white),
                     onPressed: () {
-                      context.pushNamed(RoutePage.home.name);
+                      context.goNamed(RoutePage.home.name);
                     },
                   )
                 : CircularProgressIndicator(color: colorMain),

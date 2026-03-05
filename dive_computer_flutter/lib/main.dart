@@ -20,6 +20,7 @@ Future<void> main() async {
       skipTaskbar: false,
       titleBarStyle: TitleBarStyle.normal,
       alwaysOnTop: true,
+      minimumSize: Size(800, 600),
     );
 
     windowManager.waitUntilReadyToShow(windowOptions, () async {
