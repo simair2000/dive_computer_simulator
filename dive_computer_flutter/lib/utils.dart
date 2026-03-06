@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:dive_computer_flutter/extensions.dart';
+import 'package:dive_computer_flutter/styles.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
@@ -57,6 +58,21 @@ void showSnackbar(String title, String message) {
   );
 }
 
+Future showGetDialog(String title, String message) {
+  return Get.dialog(
+    AlertDialog(
+      title: Text(title),
+      content: Text(message),
+      actions: [
+        Button(
+          child: Text('OK').color(Colors.white),
+          onPressed: () => Get.back(),
+        ),
+      ],
+    ),
+  );
+}
+
 Future showToast(String msg, {double? fontSize, Duration? duration}) {
   return Get.showOverlay(
     asyncFunction: () async {
@@ -64,18 +80,19 @@ Future showToast(String msg, {double? fontSize, Duration? duration}) {
     },
     loadingWidget: Scaffold(
       backgroundColor: Colors.black.withAlpha(100),
-      body: Container(
-        width: double.infinity,
-        height: double.infinity,
-        margin: EdgeInsets.symmetric(horizontal: 20, vertical: 100),
-        decoration: BoxDecoration(
-          color: Colors.red,
-          borderRadius: BorderRadius.all(Radius.circular(10)),
-        ),
-        child: Center(
-          child: Text(
-            msg,
-          ).color(Colors.white).size(fontSize ?? 24).weight(FontWeight.bold),
+      body: Center(
+        child: Container(
+          width: 400,
+          height: 300,
+          margin: EdgeInsets.symmetric(horizontal: 20, vertical: 100),
+          padding: EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.all(Radius.circular(10)),
+          ),
+          child: Center(
+            child: Text(msg).color(Colors.black).size(fontSize ?? 15),
+          ),
         ),
       ),
     ),

@@ -26,19 +26,26 @@ class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Image.asset('assets/scuba-diving.png', width: 200, height: 200),
+            Image.asset(
+              'assets/scuba-diving.png',
+              width: 150,
+              fit: BoxFit.cover,
+            ),
             const SizedBox(height: 20),
             const Text(
               'Dive Computer Simulator',
               style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
             ).color(colorMain).marginOnly(bottom: 10),
             Text(
-              'Made by SangHoon Kim, PADI SCUBA diving Instructor #537076',
-            ).marginOnly(bottom: 20),
+              'ZHL-16C Algorithm based.',
+            ).color(colorMain).marginOnly(bottom: 10),
+            Text(
+              'Made by SangHoon Kim, PADI SCUBA Instructor #537076',
+            ).color(colorMain).marginOnly(bottom: 30),
             _showGoButton
                 ? Button(
                     height: 50,
-                    child: Text('START').color(Colors.white),
+                    child: Text('Let\'s DIVE').color(Colors.white),
                     onPressed: () {
                       context.goNamed(RoutePage.home.name);
                     },

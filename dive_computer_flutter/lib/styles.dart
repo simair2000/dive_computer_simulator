@@ -42,7 +42,7 @@ Widget Button({
         color: tColor,
         minWidth: width,
         height: height,
-        padding: padding ?? EdgeInsets.zero,
+        padding: padding ?? EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         shape: RoundedRectangleBorder(
           borderRadius: borderRadius,
           side: BorderSide(
