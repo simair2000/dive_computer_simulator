@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:after_layout/after_layout.dart';
 import 'package:dive_computer_flutter/buhlmann.dart';
@@ -10,6 +9,7 @@ import 'package:dive_computer_flutter/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:window_manager/window_manager.dart';
 
 class PageHome extends StatefulWidget {
   const PageHome({super.key});
@@ -27,15 +27,18 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
     text: '21',
   );
 
+  bool _showTissueLoadingDetails = false;
+
   @override
   void initState() {
     _surfaceTime = Buhlmann.getSurfaceTime();
-    _textControllerDepth.addListener(() {
-      double? depth = double.tryParse(_textControllerDepth.text);
-      if (depth != null && 1.5 <= depth) {
-        _buhlmann.startDive();
-      }
-    });
+    // _textControllerDepth.addListener(() {
+    //   double? depth = double.tryParse(_textControllerDepth.text);
+    //   if (depth != null && 1.5 <= depth) {
+    //     _buhlmann.startDive();
+    //   }
+    // });
+    _buhlmann.startDive();
     super.initState();
   }
 
@@ -43,6 +46,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
   void dispose() {
     _textControllerEAN.dispose();
     _textControllerDepth.dispose();
+    _buhlmann.dispose();
     super.dispose();
   }
 
@@ -77,6 +81,8 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
           _buhlmann.decoStopTime,
           _buhlmann.needDeco,
           _buhlmann.currentPO2,
+          _buhlmann.gfHighNotifier,
+          _buhlmann.gfLowNotifier,
         ]),
         builder: (context, child) {
           return Row(
@@ -118,7 +124,14 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                               'Surface Time : ${_surfaceTime == null ? 'First Dive!' : _surfaceTime.toString()}',
                             ).color(colorMain).weight(FontWeight.bold),
                       _horizontalLine(),
-                      Text('Depth').color(colorMain).weight(FontWeight.bold),
+                      SizedBox(
+                        width: double.infinity,
+                        child: Text('Depth')
+                            .color(colorMain)
+                            .weight(FontWeight.bold)
+                            .align(TextAlign.center)
+                            .marginOnly(bottom: 10),
+                      ),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -211,6 +224,105 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                           ),
                         ],
                       ).marginOnly(bottom: 10),
+                      _horizontalLine(),
+                      Row(
+                        children: [
+                          Text(
+                            'GF High',
+                          ).color(colorMain).weight(FontWeight.bold),
+                          Slider(
+                            activeColor: colorMain,
+                            value: _buhlmann.gfHighNotifier.value,
+                            onChanged: (value) {
+                              if (value <= _buhlmann.gfLowNotifier.value) {
+                                if (value < 11) value = 11;
+                                _buhlmann.gfLowNotifier.value = value - 1;
+                                _buhlmann.gfLow = (value - 1) / 100.0;
+                              }
+                              _buhlmann.gfHighNotifier.value = value;
+                              _buhlmann.gfHigh = value / 100.0;
+                            },
+                            min: 10,
+                            max: 95,
+                          ),
+                          Text(
+                            '${_buhlmann.gfHighNotifier.value.toInt()}%',
+                          ).color(colorMain).weight(FontWeight.bold),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          SizedBox(
+                            width: 55,
+                            child: Text(
+                              'GF Low',
+                            ).color(colorMain).weight(FontWeight.bold),
+                          ),
+                          Slider(
+                            activeColor: colorMain,
+                            value: _buhlmann.gfLowNotifier.value,
+                            onChanged: (value) {
+                              if (value >= _buhlmann.gfHighNotifier.value) {
+                                if (value > 94) value = 94;
+                                _buhlmann.gfHighNotifier.value = value + 1;
+                                _buhlmann.gfHigh = (value + 1) / 100.0;
+                              }
+                              _buhlmann.gfLowNotifier.value = value;
+                              _buhlmann.gfLow = value / 100.0;
+                            },
+                            min: 10,
+                            max: 95,
+                          ),
+                          Text(
+                            '${_buhlmann.gfLowNotifier.value.toInt()}%',
+                          ).color(colorMain).weight(FontWeight.bold),
+                        ],
+                      ),
+                      Text('Conservatism Settings')
+                          .color(colorMain)
+                          .weight(FontWeight.bold)
+                          .marginOnly(bottom: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Button(
+                            tooltip:
+                                'Most conservative setting with longest decompression times',
+                            child: Text('SAFE').color(Colors.white),
+                            onPressed: () {
+                              _buhlmann.gfHighNotifier.value = 70;
+                              _buhlmann.gfLowNotifier.value = 30;
+                              _buhlmann.gfHigh = 0.7;
+                              _buhlmann.gfLow = 0.3;
+                            },
+                            color: colorMain,
+                          ),
+                          Button(
+                            child: Text('MODERATE').color(Colors.white),
+                            onPressed: () {
+                              _buhlmann.gfHighNotifier.value = 85;
+                              _buhlmann.gfLowNotifier.value = 40;
+                              _buhlmann.gfHigh = 0.85;
+                              _buhlmann.gfLow = 0.4;
+                            },
+                            color: colorMain,
+                            tooltip:
+                                'Moderate conservatism with a balance between safety and efficiency',
+                          ),
+                          Button(
+                            tooltip:
+                                'Shortest stop time but higher risk of DCS',
+                            child: Text('AGGRESSIVE').color(Colors.white),
+                            onPressed: () {
+                              _buhlmann.gfHighNotifier.value = 95;
+                              _buhlmann.gfLowNotifier.value = 50;
+                              _buhlmann.gfHigh = 0.95;
+                              _buhlmann.gfLow = 0.5;
+                            },
+                            color: colorMain,
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -273,6 +385,67 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                             ),
                           )
                           .marginOnly(bottom: 5),
+                      _horizontalLine(),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Tissue Saturation (N2 Loadings)')
+                              .color(colorMain)
+                              .weight(FontWeight.bold)
+                              .marginOnly(bottom: 10),
+                          Button(
+                            child: Text(
+                              _showTissueLoadingDetails
+                                  ? 'Hide details'
+                                  : 'Show details',
+                            ).color(Colors.white),
+                            onPressed: () {
+                              setState(() {
+                                _showTissueLoadingDetails =
+                                    !_showTissueLoadingDetails;
+                                windowManager.setSize(
+                                  Size(
+                                    900,
+                                    _showTissueLoadingDetails ? 870 : 570,
+                                  ),
+                                );
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                      Builder(
+                        builder: (context) {
+                          return Column(
+                            children: List.generate(
+                              _buhlmann.currentLoadings.length,
+                              (index) {
+                                double width =
+                                    _buhlmann.currentLoadings[index] * 100;
+                                if (450 < width) width = 450;
+                                return Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Container(
+                                      color: colorMain,
+                                      height: 1,
+                                      width: width,
+                                    ),
+                                    Visibility(
+                                      visible: _showTissueLoadingDetails,
+                                      child: Text(
+                                        _buhlmann.currentLoadings[index]
+                                            .toStringAsFixed(2),
+                                      ).color(colorMain),
+                                    ),
+                                  ],
+                                ).marginOnly(bottom: 5);
+                              },
+                            ),
+                          );
+                        },
+                      ),
                     ],
                   ),
                 ),

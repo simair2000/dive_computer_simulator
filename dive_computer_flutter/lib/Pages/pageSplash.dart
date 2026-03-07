@@ -17,7 +17,7 @@ class PageSplash extends StatefulWidget {
 }
 
 class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
-  bool _showGoButton = false;
+  bool _showGoButton = true;
 
   @override
   Widget build(BuildContext context) {
@@ -59,10 +59,10 @@ class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
 
   @override
   FutureOr<void> afterFirstLayout(BuildContext context) {
-    Timer(Duration(seconds: 3), () {
-      setState(() {
-        _showGoButton = true;
-      });
-    });
+    // Timer(Duration(seconds: 3), () {
+    //   setState(() {
+    //     _showGoButton = true;
+    //   });
+    // });
   }
 }

@@ -14,6 +14,7 @@ Widget Button({
   bool? enable,
   Color? color,
   Color? hoverColor,
+  String? tooltip,
 }) {
   Color tColor = color ?? Color(0xFF506898);
   BorderRadiusGeometry borderRadius = BorderRadius.all(Radius.circular(5));
@@ -32,27 +33,31 @@ Widget Button({
     child: Container(
       decoration: BoxDecoration(borderRadius: borderRadius),
       margin: margin ?? EdgeInsets.zero,
-      child: MaterialButton(
-        hoverColor: hoverColor,
-        disabledColor: tColor.withOpacity(0.3),
-        hoverElevation: 0,
-        disabledTextColor: Colors.black.withOpacity(0.3),
-        elevation: 0,
-        onPressed: enable != null && enable == false ? null : onPressed,
-        color: tColor,
-        minWidth: width,
-        height: height,
-        padding: padding ?? EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        shape: RoundedRectangleBorder(
-          borderRadius: borderRadius,
-          side: BorderSide(
-            color: borderColor ?? Colors.transparent,
-            width: borderWidth ?? 0,
+      child: Tooltip(
+        message: tooltip ?? '',
+        child: MaterialButton(
+          hoverColor: hoverColor,
+          disabledColor: tColor.withOpacity(0.3),
+          hoverElevation: 0,
+          disabledTextColor: Colors.black.withOpacity(0.3),
+          elevation: 0,
+          onPressed: enable != null && enable == false ? null : onPressed,
+          color: tColor,
+          minWidth: width,
+          height: height,
+          padding:
+              padding ?? EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: borderRadius,
+            side: BorderSide(
+              color: borderColor ?? Colors.transparent,
+              width: borderWidth ?? 0,
+            ),
           ),
+          child: enable != null && enable == false
+              ? Opacity(opacity: 0.3, child: child)
+              : child,
         ),
-        child: enable != null && enable == false
-            ? Opacity(opacity: 0.3, child: child)
-            : child,
       ),
     ),
   );

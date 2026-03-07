@@ -80,6 +80,9 @@ class Buhlmann {
 
   double gfHigh = 0.8; // 고감압 계수 (예시값, 실제로는 다이빙 프로필에 따라 조정 필요)
   double gfLow = 0.2; // 저감압 계수 (예시값, 실제로는 다이빙 프로필에 따라 조정 필요)
+  var gfHighNotifier = ValueNotifier<double>(80); // 고감압 계수 (퍼센트 단위로 표시)
+  var gfLowNotifier = ValueNotifier<double>(20); // 저감압 계수 (퍼센트 단위로 표시)
+
   var ndl = ValueNotifier<double>(0.0); // 무감압 한계 시간 (분 단위)
   var tts = ValueNotifier<int>(0); // Time To Surface (분 단위)
   var isOnDiving = ValueNotifier<bool>(false); // 다이빙 중 여부
@@ -95,7 +98,9 @@ class Buhlmann {
   var saftyStop = ValueNotifier<Duration>(Duration.zero); // 안전 정지 남은 시간 (초 단위)
 
   // PO2
-  var currentPO2 = ValueNotifier<double>(0.21); // 현재 PO2 (bar 단위)
+  var currentPO2 = ValueNotifier<double>(0.21);
+
+  Timer? _timer;
 
   Buhlmann() {
     var surfaceTime = getSurfaceTime();
@@ -110,6 +115,10 @@ class Buhlmann {
       currentLoadings = List.from(lastLoadingList);
       updateN2Loadings(currentLoadings, 0, fractionO2, intervalSeconds);
     }
+  }
+
+  void dispose() {
+    _timer?.cancel();
   }
 
   void setEAN(int newEAN) {
@@ -443,6 +452,8 @@ class Buhlmann {
     if (1.5 <= currentDepth.value) {
       currentDiveTime.value += Duration(seconds: intervalSeconds.toInt());
     } else {
+      isOnDiving.value = false;
+      tts.value = 0;
       return false; // 수심이 1.5m 이하로 내려가면 다이빙 종료
     }
 
@@ -453,12 +464,10 @@ class Buhlmann {
     if (isOnDiving.value) return; // 이미 다이빙 중인 경우 중복 실행 방지
     isOnDiving.value = true;
     currentDiveTime.value = Duration.zero;
-    Timer.periodic(Duration(seconds: intervalSeconds.toInt()), (timer) {
-      if (!processCycle()) {
-        timer.cancel();
-        isOnDiving.value = false;
-        tts.value = 0;
-      }
+    _timer = Timer.periodic(Duration(seconds: intervalSeconds.toInt()), (
+      timer,
+    ) {
+      processCycle();
     });
   }
 
