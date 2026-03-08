@@ -19,7 +19,6 @@ class PageHome extends StatefulWidget {
 }
 
 class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
-  Duration? _surfaceTime;
   final Buhlmann _buhlmann = Buhlmann();
 
   final TextEditingController _textControllerDepth = TextEditingController();
@@ -31,7 +30,6 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
 
   @override
   void initState() {
-    _surfaceTime = Buhlmann.getSurfaceTime();
     // _textControllerDepth.addListener(() {
     //   double? depth = double.tryParse(_textControllerDepth.text);
     //   if (depth != null && 1.5 <= depth) {
@@ -83,6 +81,9 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
           _buhlmann.currentPO2,
           _buhlmann.gfHighNotifier,
           _buhlmann.gfLowNotifier,
+          _buhlmann.ppo2,
+          _buhlmann.updateTick,
+          _buhlmann.surfaceTime,
         ]),
         builder: (context, child) {
           return Row(
@@ -92,8 +93,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                 child: Container(
                   color: colorMain.withAlpha(30),
                   padding: EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: ListView(
                     children: [
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -121,7 +121,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                               'On Diving...!!',
                             ).color(colorMain).weight(FontWeight.bold)
                           : Text(
-                              'Surface Time : ${_surfaceTime == null ? 'First Dive!' : _surfaceTime.toString()}',
+                              'Surface Time : ${_buhlmann.surfaceTime.value == Duration.zero ? 'First Dive!' : '${_buhlmann.surfaceTime.value.inMinutes}:${(_buhlmann.surfaceTime.value.inSeconds % 60).toString().padLeft(2, '0')}'}',
                             ).color(colorMain).weight(FontWeight.bold),
                       _horizontalLine(),
                       SizedBox(
@@ -190,11 +190,40 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                         ],
                       ).marginOnly(bottom: 10),
                       _horizontalLine(),
-
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisAlignment: MainAxisAlignment.start,
                         children: [
-                          Text('EAN').color(colorMain).weight(FontWeight.bold),
+                          SizedBox(
+                            width: 40,
+                            child: Text(
+                              'PPO2',
+                            ).color(colorMain).weight(FontWeight.bold),
+                          ).marginOnly(right: 20),
+                          Button(
+                            child: Text(
+                              '${_buhlmann.ppo2.value}',
+                            ).color(Colors.white),
+
+                            onPressed: () {
+                              _buhlmann.ppo2.value = _buhlmann.ppo2.value == 1.4
+                                  ? 1.6
+                                  : 1.4;
+                            },
+                          ).marginOnly(right: 40),
+                          Text(
+                            'MOD : ${_buhlmann.mod.floor().toStringAsFixed(1)}m',
+                          ).color(colorMain).weight(FontWeight.bold),
+                        ],
+                      ).marginOnly(bottom: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 40,
+                            child: Text(
+                              'EAN',
+                            ).color(colorMain).weight(FontWeight.bold),
+                          ),
                           InputText(
                             width: 100,
                             controller: _textControllerEAN,
@@ -330,6 +359,9 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
               Expanded(
                 flex: 3,
                 child: Container(
+                  color: _buhlmann.needDeco.value
+                      ? Colors.red.withAlpha(70)
+                      : Colors.transparent,
                   padding: EdgeInsets.all(20),
                   child: ListView(
                     children: [
@@ -406,42 +438,56 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                                 windowManager.setSize(
                                   Size(
                                     900,
-                                    _showTissueLoadingDetails ? 870 : 570,
+                                    _showTissueLoadingDetails ? 880 : 600,
                                   ),
                                 );
                               });
                             },
                           ),
                         ],
-                      ),
+                      ).marginOnly(bottom: 5),
                       Builder(
                         builder: (context) {
-                          return Column(
-                            children: List.generate(
-                              _buhlmann.currentLoadings.length,
-                              (index) {
-                                double width =
-                                    _buhlmann.currentLoadings[index] * 100;
-                                if (450 < width) width = 450;
-                                return Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Container(
-                                      color: colorMain,
-                                      height: 1,
-                                      width: width,
-                                    ),
-                                    Visibility(
-                                      visible: _showTissueLoadingDetails,
-                                      child: Text(
-                                        _buhlmann.currentLoadings[index]
-                                            .toStringAsFixed(2),
-                                      ).color(colorMain),
-                                    ),
-                                  ],
-                                ).marginOnly(bottom: 5);
-                              },
+                          return Container(
+                            padding: EdgeInsets.symmetric(vertical: 5),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  Colors.green,
+                                  Colors.yellow,
+                                  Colors.yellow,
+                                  Colors.red,
+                                ],
+                                stops: [0, 0.4, 0.9, 1.0],
+                              ),
+                            ),
+                            child: Column(
+                              children: List.generate(
+                                _buhlmann.currentLoadings.length,
+                                (index) {
+                                  double width =
+                                      _buhlmann.currentLoadings[index] * 150;
+                                  if (450 < width) width = 450;
+                                  return Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Container(
+                                        color: Colors.black,
+                                        height: 1,
+                                        width: width,
+                                      ),
+                                      Visibility(
+                                        visible: _showTissueLoadingDetails,
+                                        child: Text(
+                                          _buhlmann.currentLoadings[index]
+                                              .toStringAsFixed(2),
+                                        ).color(Colors.white),
+                                      ),
+                                    ],
+                                  ).marginOnly(bottom: 5);
+                                },
+                              ),
                             ),
                           );
                         },
@@ -458,11 +504,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
   }
 
   @override
-  FutureOr<void> afterFirstLayout(BuildContext context) {
-    setState(() {
-      _surfaceTime = Buhlmann.getSurfaceTime();
-    });
-  }
+  FutureOr<void> afterFirstLayout(BuildContext context) {}
 
   Widget _horizontalLine() {
     return Container(

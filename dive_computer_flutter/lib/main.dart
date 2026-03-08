@@ -14,13 +14,13 @@ Future<void> main() async {
 
   if (GetPlatform.isWindows) {
     WindowOptions windowOptions = const WindowOptions(
-      size: Size(900, 570),
+      size: Size(900, 600),
       center: true,
       // backgroundColor: Colors.white,
       skipTaskbar: false,
       titleBarStyle: TitleBarStyle.normal,
       alwaysOnTop: true,
-      minimumSize: Size(900, 570),
+      minimumSize: Size(900, 600),
     );
 
     windowManager.waitUntilReadyToShow(windowOptions, () async {

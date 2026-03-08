@@ -83,11 +83,18 @@ class Buhlmann {
   var gfHighNotifier = ValueNotifier<double>(80); // 고감압 계수 (퍼센트 단위로 표시)
   var gfLowNotifier = ValueNotifier<double>(20); // 저감압 계수 (퍼센트 단위로 표시)
 
+  var ppo2 = ValueNotifier<double>(1.4); // 최대 산소 분압
+  // var mod = ValueNotifier<double>(0); // Max Of Depth
+
+  double get mod => (((ppo2.value / fractionO2) * 10) - 10);
+  var modNotifier = ValueNotifier<double>(0);
+
   var ndl = ValueNotifier<double>(0.0); // 무감압 한계 시간 (분 단위)
   var tts = ValueNotifier<int>(0); // Time To Surface (분 단위)
   var isOnDiving = ValueNotifier<bool>(false); // 다이빙 중 여부
   var maxDepth = ValueNotifier<double>(0.0); // 최대 수심 기록
   var currentDiveTime = ValueNotifier<Duration>(Duration.zero); // 현재 다이빙 시간
+  var surfaceTime = ValueNotifier<Duration>(Duration.zero); // 수면휴식 시간
 
   // DECO Plan
   var decoStopDepth = ValueNotifier<int>(0); // 다음 감압 정지 수심 (3m 단위)
@@ -101,6 +108,10 @@ class Buhlmann {
   var currentPO2 = ValueNotifier<double>(0.21);
 
   Timer? _timer;
+  var updateTick = ValueNotifier<int>(0);
+
+  // 감압 모드에서의 GF 기준점 고정용 변수
+  int _decoAnchorDepth = 0;
 
   Buhlmann() {
     var surfaceTime = getSurfaceTime();
@@ -233,171 +244,350 @@ class Buhlmann {
   }
 
   void calculateDecoStop() {
-    // 1. 시뮬레이션용 로딩 배열 복사 (원본 보존)
+    // 1. 시뮬레이션용 로딩 복사
     List<double> tempLoadings = List.from(currentLoadings);
 
-    // 1. 수면(0m)이 안전한지 확인 (NDL 체크)
-    // 수면에서는 GF High를 적용하여 검사
+    // 2. 수면(0m) 안전 점검 (GF High 기준)
     if (isDepthSafe(0.0, tempLoadings, gfHigh)) {
-      needDeco.value = false; // 감압 불필요 (NDL 남음)
+      needDeco.value = false;
       decoStopDepth.value = 0;
       decoStopTime.value = 0;
+
+      // [중요] 감압이 풀리면 Anchor 초기화
+      _decoAnchorDepth = 0;
       return;
     }
 
-    needDeco.value = true; // 감압 필요
-    // 2. 감압 정지 수심(Ceiling) 찾기
-    // 3m 부터 시작해서 3, 6, 9... 순으로 내려가며 안전한지 확인
-    // 주의: 첫 정지 수심을 찾는 것이므로 GF_Low를 기준으로 함 (보수적 접근)
-    int depth = 3;
-    while (depth < 300) {
-      // 최대 300m 제한 (무한루프 방지)
-      if (isDepthSafe(depth.toDouble(), tempLoadings, gfLow)) {
-        // 이 수심은 안전함! -> 여기가 바로 정지 수심
-        decoStopDepth.value = depth;
-        break;
-      }
-      depth += 3; // 3m 더 깊이 내려가서 확인
-    }
+    needDeco.value = true;
 
-    // 3. 정지 시간 계산 (시뮬레이션)
-    // 현재 발견한 stop_depth에서 얼마나 있어야, 다음 단계(stop_depth - 3m)로 갈 수 있나?
-    // GF 보간 (Interpolation):
-    // 현재 정지 수심에서는 GF_Low, 수면에서는 GF_High.
-    // 하지만 다음 단계로 넘어가기 위한 기준은 그 사이의 어떤 GF 값임.
-    // 편의상 여기서는 보수적으로 GF_Low를 유지하거나, 깊이에 따라 선형 보간해야 함.
-    // *표준 구현*: 현재 정지 수심이 'Deepest Stop'이므로 GF_Low를 적용.
-    // 시간이 지나서 다음 수심으로 갈 수 있는지 체크할 때도,
-    // 다음 수심에 해당하는 GF(선형 보간된 값)를 넘지 않는지 봐야 함.
-    int seconds = 0;
-    double nextStopDepth = (decoStopDepth.value - 3).toDouble();
-    while (seconds < 3600) {
-      // 최대 99분 제한 (99 * 60)
-      // A. 10초 후의 질소 상태 예측 (기체는 현재 기체)
-      // Update_N2_Loadings 함수 재사용 (시간 10초)
-      updateN2Loadings(
-        tempLoadings,
-        decoStopDepth.value.toDouble(),
-        fractionO2,
-        10.0,
-      );
-      seconds += 10;
-
-      // B. 이제 3m 위로 올라가도 안전한가?
-      // 올라갈 목표 수심에 대해 적절한 GF 계산 (선형 보간)
-      // Slope = (GF_High - GF_Low) / (0 - First_Stop_Depth)
-      // GF_target = GF_High - (Slope * Target_Depth)
-      // 하지만 First_Stop_Depth는 고정되어야 함 (최초 발견된 plan.stop_depth)
-
-      double slope =
-          (gfHigh - gfLow) /
-          (0.0 -
-              decoStopDepth.value
-                  .toDouble()); // 기울기는 음수 아님에 주의 (분모가 음수라 전체 양수화 필요하나 로직 점검 필요)
-      // 정확한 로직: 깊을수록 GF 작음.
-      // 분모: (0 - MaxDepth) -> 음수. 분자: (High - Low) -> 양수. 결과: 음수 기울기.
-      // 식: GF = GF_Hi + Slope * Depth
-
-      double gfAtNextDepth = gfHigh + slope * nextStopDepth;
-
-      // 목표 수심(next_stop_depth)이 안전한지 체크
-      if (isDepthSafe(nextStopDepth, tempLoadings, gfAtNextDepth)) {
-        // 안전하다! 이제 올라가도 됨.
-        decoStopTime.value = (seconds / 60.0).ceil();
+    // 3. Anchor Depth(최초 감압 발생 수심) 계산 및 고정
+    // 매번 새로 계산하는 것이 아니라, 현재 기록된 _decoAnchorDepth보다
+    // 더 깊은 정지가 필요할 때만 갱신합니다. (Latching)
+    int currentDeepestStop = 0;
+    for (int d = 3; d < 300; d += 3) {
+      if (isDepthSafe(d.toDouble(), tempLoadings, gfLow)) {
+        currentDeepestStop = d;
         break;
       }
     }
+    if (currentDeepestStop == 0)
+      currentDeepestStop = (currentDepth.value / 3).ceil() * 3;
+
+    // 기록된 Anchor보다 현재 계산된 정지가 더 깊으면 갱신 (더 깊어지는 건 반영)
+    // 하지만 얕아지는 건 반영하지 않음 (GF 기울기 유지를 위해)
+    if (_decoAnchorDepth == 0 || currentDeepestStop > _decoAnchorDepth) {
+      _decoAnchorDepth = currentDeepestStop;
+    }
+
+    // 4. GF 기울기(Slope) 계산 (고정된 Anchor 사용)
+    double gfSlope = (gfHigh - gfLow) / (0.0 - _decoAnchorDepth.toDouble());
+
+    // 5. 실제 표시할 정지 수심(Display Stop) 찾기
+    // 바닥(Anchor)부터 훑어 올라오면서 "여기서 멈춰야 하나?" 확인
+    int currentSimDepth = _decoAnchorDepth;
+    int requiredTime = 0;
+
+    while (currentSimDepth > 0) {
+      // 5-1. 다음 목표 수심 (3m 위)
+      double nextDepth = (currentSimDepth - 3).toDouble();
+      if (nextDepth < 0) nextDepth = 0.0;
+
+      // 5-2. 목표 수심에서의 허용 GF 계산
+      double targetGf = gfHigh + (gfSlope * nextDepth);
+      if (targetGf > gfHigh) targetGf = gfHigh;
+      if (targetGf < gfLow) targetGf = gfLow;
+
+      // 5-3. 시간 계산 시뮬레이션
+      requiredTime = 0;
+      List<double> timeCalcLoadings = List.from(tempLoadings);
+
+      // [핵심 수정] 다음 수심 판별 시 '아주 약간의 마진'을 둠
+      // 조직 압력이 M-Value에 딱 걸려있으면(0분) 바로 통과시키지 않고
+      // 확실히 안전해질 때까지 잡기 위해 nextDepth를 보수적으로 체크할 수도 있음.
+      // 여기서는 0분으로 계산되더라도, loop 진입 전 한 번 더 체크.
+
+      while (requiredTime < 99) {
+        // 목표 수심으로 이동 가능한가?
+        // 팁: 시뮬레이션 안정성을 위해 nextDepth보다 0.1m 더 얕은 곳도 안전한지 체크하면
+        // '도착하자마자 통과'되는 현상을 줄일 수 있음 (Buffer).
+        // 하지만 표준 로직은 정확한 depth를 사용함.
+        if (isDepthSafe(nextDepth, timeCalcLoadings, targetGf)) {
+          break;
+        }
+
+        // 대기 (1분)
+        updateN2Loadings(
+          timeCalcLoadings,
+          currentSimDepth.toDouble(),
+          fractionO2,
+          60.0,
+        );
+        requiredTime++;
+      }
+
+      // 5-4. 결과 판정
+      if (requiredTime > 0) {
+        // 시간이 필요함 -> 여기가 정지 수심
+        decoStopDepth.value = currentSimDepth;
+        decoStopTime.value = requiredTime;
+        return;
+      } else {
+        // 시간이 0분 -> 통과 가능
+        currentSimDepth -= 3;
+
+        // [선택] 통과하더라도 조직 상태를 업데이트 해줘야 더 정확함
+        // (상승하면서도 가스가 빠지기 때문)
+        // updateN2Loadings(tempLoadings, currentSimDepth.toDouble(), fractionO2, 0.0);
+        // -> 0분이라도 순식간에 지나가는게 아니므로 실제로는 메인 루프에서 처리됨.
+      }
+    }
+
+    // 모든 감압 정지 통과 (안전정지 구간 등)
+    decoStopDepth.value = 3;
+    decoStopTime.value = 0;
+    needDeco.value = false;
+
+    // // 1. 시뮬레이션용 로딩 배열 복사 (원본 보존)
+    // List<double> tempLoadings = List.from(currentLoadings);
+
+    // // 1. 수면(0m)이 안전한지 확인 (NDL 체크)
+    // // 수면에서는 GF High를 적용하여 검사
+    // if (isDepthSafe(0.0, tempLoadings, gfHigh)) {
+    //   needDeco.value = false; // 감압 불필요 (NDL 남음)
+    //   decoStopDepth.value = 0;
+    //   decoStopTime.value = 0;
+    //   return;
+    // }
+
+    // needDeco.value = true; // 감압 필요
+    // // 2. 감압 정지 수심(Ceiling) 찾기
+    // // 3m 부터 시작해서 3, 6, 9... 순으로 내려가며 안전한지 확인
+    // // 주의: 첫 정지 수심을 찾는 것이므로 GF_Low를 기준으로 함 (보수적 접근)
+    // int depth = 3;
+    // while (depth < 300) {
+    //   // 최대 300m 제한 (무한루프 방지)
+    //   if (isDepthSafe(depth.toDouble(), tempLoadings, gfLow)) {
+    //     // 이 수심은 안전함! -> 여기가 바로 정지 수심
+    //     decoStopDepth.value = depth;
+    //     break;
+    //   }
+    //   depth += 3; // 3m 더 깊이 내려가서 확인
+    // }
+
+    // // 3. 정지 시간 계산 (시뮬레이션)
+    // // 현재 발견한 stop_depth에서 얼마나 있어야, 다음 단계(stop_depth - 3m)로 갈 수 있나?
+    // // GF 보간 (Interpolation):
+    // // 현재 정지 수심에서는 GF_Low, 수면에서는 GF_High.
+    // // 하지만 다음 단계로 넘어가기 위한 기준은 그 사이의 어떤 GF 값임.
+    // // 편의상 여기서는 보수적으로 GF_Low를 유지하거나, 깊이에 따라 선형 보간해야 함.
+    // // *표준 구현*: 현재 정지 수심이 'Deepest Stop'이므로 GF_Low를 적용.
+    // // 시간이 지나서 다음 수심으로 갈 수 있는지 체크할 때도,
+    // // 다음 수심에 해당하는 GF(선형 보간된 값)를 넘지 않는지 봐야 함.
+    // int seconds = 0;
+    // double nextStopDepth = (decoStopDepth.value - 3).toDouble();
+    // while (seconds < 3600) {
+    //   // 최대 99분 제한 (99 * 60)
+    //   // A. 10초 후의 질소 상태 예측 (기체는 현재 기체)
+    //   // Update_N2_Loadings 함수 재사용 (시간 10초)
+    //   updateN2Loadings(
+    //     tempLoadings,
+    //     decoStopDepth.value.toDouble(),
+    //     fractionO2,
+    //     10.0,
+    //   );
+    //   seconds += 10;
+
+    //   // B. 이제 3m 위로 올라가도 안전한가?
+    //   // 올라갈 목표 수심에 대해 적절한 GF 계산 (선형 보간)
+    //   // Slope = (GF_High - GF_Low) / (0 - First_Stop_Depth)
+    //   // GF_target = GF_High - (Slope * Target_Depth)
+    //   // 하지만 First_Stop_Depth는 고정되어야 함 (최초 발견된 plan.stop_depth)
+
+    //   double slope =
+    //       (gfHigh - gfLow) /
+    //       (0.0 -
+    //           decoStopDepth.value
+    //               .toDouble()); // 기울기는 음수 아님에 주의 (분모가 음수라 전체 양수화 필요하나 로직 점검 필요)
+    //   // 정확한 로직: 깊을수록 GF 작음.
+    //   // 분모: (0 - MaxDepth) -> 음수. 분자: (High - Low) -> 양수. 결과: 음수 기울기.
+    //   // 식: GF = GF_Hi + Slope * Depth
+
+    //   double gfAtNextDepth = gfHigh + slope * nextStopDepth;
+
+    //   // 목표 수심(next_stop_depth)이 안전한지 체크
+    //   if (isDepthSafe(nextStopDepth, tempLoadings, gfAtNextDepth)) {
+    //     // 안전하다! 이제 올라가도 됨.
+    //     decoStopTime.value = (seconds / 60.0).ceil();
+    //     break;
+    //   }
+    // }
   }
 
   int calculateTTS() {
-    // 1. 시뮬레이션용 로딩 배열 복사 (원본 보존)
     List<double> tempLoadings = List.from(currentLoadings);
-
     double totalTimeMin = 0.0;
     double simDepth = currentDepth.value;
-    const double ASCENT_RATE = 18.0; // 분당 18m 상승
+    const double ASCENT_RATE = 10.0; // 분당 10m 상승 (보통 감압 시뮬레이션은 10m/min 사용)
 
-    // 2. 무감압 한계(NDL) 이내인지 확인 (수면으로 바로 상승 가능한지 체크)
-    // 수면 도착 시점의 안전도는 GF_High로 판단
+    // 1. NDL 이내(No Deco)인 경우
     if (isDepthSafe(0.0, tempLoadings, gfHigh)) {
-      // 감압 없이 바로 상승 가능하므로 상승 시간만 더함
-      totalTimeMin = getAscentTime(simDepth, ASCENT_RATE);
-
-      // 올림 처리하여 반환 (안전을 위해 분 단위 올림)
+      // 단순 상승 시간만 계산
+      totalTimeMin = getAscentTime(simDepth, 18.0); // 무감압 상승은 18m/min 허용하기도 함
       return totalTimeMin.ceil();
     }
 
-    // 3. 첫 번째 감압 정지 수심(Deepest Stop) 찾기
-    // 바닥에서부터 3m 단위로 올라가며 GF_Low를 기준으로 안전한 첫 수심을 찾음
-    int firstStopDepth = 0;
-    for (int d = 3; d < simDepth.toInt(); d += 3) {
+    // 2. Deepest Stop 찾기 (Deco Mode)
+    int deepestStop = 0;
+    for (int d = 3; d <= simDepth.toInt() + 3; d += 3) {
       if (isDepthSafe(d.toDouble(), tempLoadings, gfLow)) {
-        firstStopDepth = d;
+        deepestStop = d;
         break;
       }
     }
-    // 만약 계산상 현재 수심보다 더 깊은 곳이 첫 정지라면(이론상), 현재 수심을 첫 정지로 설정
-    if (firstStopDepth == 0 || firstStopDepth > simDepth) {
-      firstStopDepth = simDepth.toInt(); // 매우 위험한 상황이나 시뮬레이션 위해 설정
+    // 만약 계산된 Stop이 현재 수심보다 깊거나 못 찾았다면 현재 수심을 기준으로 시작
+    if (deepestStop == 0) deepestStop = (simDepth / 3).ceil() * 3;
+
+    // 3. 현재 수심 -> 첫 정지 수심까지 상승
+    if (simDepth > deepestStop) {
+      double ascentTime = getAscentTime(simDepth - deepestStop, ASCENT_RATE);
+      // 상승 중 가스 교환 (평균 수심)
+      updateN2Loadings(
+        tempLoadings,
+        (simDepth + deepestStop) / 2.0,
+        fractionO2,
+        ascentTime * 60.0,
+      );
+      totalTimeMin += ascentTime;
+      simDepth = deepestStop.toDouble();
+    } else {
+      // 이미 정지 수심보다 얕거나 같은 곳에 있다면 시뮬레이션 깊이를 정지 수심으로 맞춤
+      simDepth = deepestStop.toDouble();
     }
 
-    // 4. 현재 수심에서 첫 정지 수심까지 상승 시뮬레이션
-    double ascentDist = simDepth - firstStopDepth;
-    double ascentTime = getAscentTime(ascentDist, ASCENT_RATE);
-
-    // 상승하는 동안에도 가스 교환(배출/흡수)이 일어남
-    // 평균 수심에서 해당 시간만큼 머무른 것으로 근사 계산
-    double avgDepth = (simDepth + firstStopDepth) / 2.0;
-    updateN2Loadings(tempLoadings, avgDepth, fractionO2, ascentTime * 60.0);
-
-    totalTimeMin += ascentTime;
-    simDepth = firstStopDepth.toDouble();
-
-    // 5. 감압 정지 및 단계별 상승 루프 (Deco Loop)
-    // GF 기울기 계산 (Deepest Stop에서는 GF_Low, 수면에서는 GF_High)
-    // 공식: GF_slope = (GF_High - GF_Low) / (0 - first_stop_depth)
-    // 주의: 분모가 음수이므로 기울기는 음수가 됨 (깊이가 0에 가까워질수록 GF값 증가)
-    double gfSlope = (gfHigh - gfLow) / (0.0 - firstStopDepth.toDouble());
+    // 4. 감압 루프 (Stop -> Surface)
+    // GF Slope 고정 (최초 발견된 Deepest Stop 기준)
+    double gfSlope = (gfHigh - gfLow) / (0.0 - deepestStop.toDouble());
 
     while (simDepth > 0) {
       double nextDepth = simDepth - 3.0;
       if (nextDepth < 0) nextDepth = 0.0;
 
-      // 다음 수심으로 가기 위해 필요한 목표 GF 계산 (선형 보간)
+      // 다음 수심으로 가기 위한 목표 GF
       double targetGf = gfHigh + (gfSlope * nextDepth);
 
-      // 다음 수심(3m 위)이 안전한지 확인
-      if (isDepthSafe(nextDepth, tempLoadings, targetGf)) {
-        // 안전함 -> 다음 수심으로 이동 (3m 상승)
-        double travel_time = getAscentTime(simDepth - nextDepth, ASCENT_RATE);
+      // 다음 수심이 안전한지 확인
+      bool canAscend = isDepthSafe(nextDepth, tempLoadings, targetGf);
 
-        // 이동 중 가스 교환 업데이트
+      if (canAscend) {
+        // 안전하면 상승 (3m 이동)
+        double travelTime = getAscentTime(3.0, ASCENT_RATE);
+        // 3m 이동시간은 보통 짧지만 시뮬레이션에 포함
         updateN2Loadings(
           tempLoadings,
           (simDepth + nextDepth) / 2.0,
           fractionO2,
-          travel_time * 60.0,
+          travelTime * 60.0,
         );
-
-        totalTimeMin += travel_time;
+        totalTimeMin += travelTime;
         simDepth = nextDepth;
       } else {
-        // 안전하지 않음 -> 현재 수심에서 1분간 감압 정지
-        updateN2Loadings(
-          tempLoadings,
-          simDepth,
-          fractionO2,
-          60.0,
-        ); // 1분(60초) 경과
+        // 안전하지 않으면 1분 대기 (Deco Stop)
+        updateN2Loadings(tempLoadings, simDepth, fractionO2, 60.0);
         totalTimeMin += 1.0;
       }
 
-      // 무한 루프 방지 (안전 장치)
-      if (totalTimeMin > 999.0) break;
+      if (totalTimeMin > 999) break; // 안전장치
     }
 
-    // 최종 결과는 분 단위 정수로 올림 반환
     return totalTimeMin.ceil();
+    // // 1. 시뮬레이션용 로딩 배열 복사 (원본 보존)
+    // List<double> tempLoadings = List.from(currentLoadings);
+
+    // double totalTimeMin = 0.0;
+    // double simDepth = currentDepth.value;
+    // const double ASCENT_RATE = 18.0; // 분당 18m 상승
+
+    // // 2. 무감압 한계(NDL) 이내인지 확인 (수면으로 바로 상승 가능한지 체크)
+    // // 수면 도착 시점의 안전도는 GF_High로 판단
+    // if (isDepthSafe(0.0, tempLoadings, gfHigh)) {
+    //   // 감압 없이 바로 상승 가능하므로 상승 시간만 더함
+    //   totalTimeMin = getAscentTime(simDepth, ASCENT_RATE);
+
+    //   // 올림 처리하여 반환 (안전을 위해 분 단위 올림)
+    //   return totalTimeMin.ceil();
+    // }
+
+    // // 3. 첫 번째 감압 정지 수심(Deepest Stop) 찾기
+    // // 바닥에서부터 3m 단위로 올라가며 GF_Low를 기준으로 안전한 첫 수심을 찾음
+    // int firstStopDepth = 0;
+    // for (int d = 3; d < simDepth.toInt(); d += 3) {
+    //   if (isDepthSafe(d.toDouble(), tempLoadings, gfLow)) {
+    //     firstStopDepth = d;
+    //     break;
+    //   }
+    // }
+    // // 만약 계산상 현재 수심보다 더 깊은 곳이 첫 정지라면(이론상), 현재 수심을 첫 정지로 설정
+    // if (firstStopDepth == 0 || firstStopDepth > simDepth) {
+    //   firstStopDepth = simDepth.toInt(); // 매우 위험한 상황이나 시뮬레이션 위해 설정
+    // }
+
+    // // 4. 현재 수심에서 첫 정지 수심까지 상승 시뮬레이션
+    // double ascentDist = simDepth - firstStopDepth;
+    // double ascentTime = getAscentTime(ascentDist, ASCENT_RATE);
+
+    // // 상승하는 동안에도 가스 교환(배출/흡수)이 일어남
+    // // 평균 수심에서 해당 시간만큼 머무른 것으로 근사 계산
+    // double avgDepth = (simDepth + firstStopDepth) / 2.0;
+    // updateN2Loadings(tempLoadings, avgDepth, fractionO2, ascentTime * 60.0);
+
+    // totalTimeMin += ascentTime;
+    // simDepth = firstStopDepth.toDouble();
+
+    // // 5. 감압 정지 및 단계별 상승 루프 (Deco Loop)
+    // // GF 기울기 계산 (Deepest Stop에서는 GF_Low, 수면에서는 GF_High)
+    // // 공식: GF_slope = (GF_High - GF_Low) / (0 - first_stop_depth)
+    // // 주의: 분모가 음수이므로 기울기는 음수가 됨 (깊이가 0에 가까워질수록 GF값 증가)
+    // double gfSlope = (gfHigh - gfLow) / (0.0 - firstStopDepth.toDouble());
+
+    // while (simDepth > 0) {
+    //   double nextDepth = simDepth - 3.0;
+    //   if (nextDepth < 0) nextDepth = 0.0;
+
+    //   // 다음 수심으로 가기 위해 필요한 목표 GF 계산 (선형 보간)
+    //   double targetGf = gfHigh + (gfSlope * nextDepth);
+
+    //   // 다음 수심(3m 위)이 안전한지 확인
+    //   if (isDepthSafe(nextDepth, tempLoadings, targetGf)) {
+    //     // 안전함 -> 다음 수심으로 이동 (3m 상승)
+    //     double travel_time = getAscentTime(simDepth - nextDepth, ASCENT_RATE);
+
+    //     // 이동 중 가스 교환 업데이트
+    //     updateN2Loadings(
+    //       tempLoadings,
+    //       (simDepth + nextDepth) / 2.0,
+    //       fractionO2,
+    //       travel_time * 60.0,
+    //     );
+
+    //     totalTimeMin += travel_time;
+    //     simDepth = nextDepth;
+    //   } else {
+    //     // 안전하지 않음 -> 현재 수심에서 1분간 감압 정지
+    //     updateN2Loadings(
+    //       tempLoadings,
+    //       simDepth,
+    //       fractionO2,
+    //       60.0,
+    //     ); // 1분(60초) 경과
+    //     totalTimeMin += 1.0;
+    //   }
+
+    //   // 무한 루프 방지 (안전 장치)
+    //   if (totalTimeMin > 999.0) break;
+    // }
+
+    // // 최종 결과는 분 단위 정수로 올림 반환
+    // return totalTimeMin.ceil();
   }
 
   double getAscentTime(double distM, double rateMMin) {
@@ -449,13 +639,21 @@ class Buhlmann {
       maxDepth.value = currentDepth.value;
     }
     // 다이빙 시작 조건
-    if (1.5 <= currentDepth.value) {
+    if (1.2 <= currentDepth.value) {
+      isOnDiving.value = true;
+      surfaceTime.value = Duration.zero;
       currentDiveTime.value += Duration(seconds: intervalSeconds.toInt());
     } else {
       isOnDiving.value = false;
       tts.value = 0;
-      return false; // 수심이 1.5m 이하로 내려가면 다이빙 종료
+      saftyStop.value = Duration.zero;
+      currentDiveTime.value = Duration.zero;
+      updateTick.value++;
+      surfaceTime.value += Duration(seconds: intervalSeconds.toInt());
+      return false;
     }
+
+    updateTick.value++;
 
     return true;
   }
