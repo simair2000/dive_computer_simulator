@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:after_layout/after_layout.dart';
+import 'package:dive_computer_flutter/aPref.dart';
 import 'package:dive_computer_flutter/define.dart';
 import 'package:dive_computer_flutter/extensions.dart';
 import 'package:dive_computer_flutter/router.dart';
@@ -8,6 +9,7 @@ import 'package:dive_computer_flutter/styles.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:go_router/go_router.dart';
+import 'package:window_manager/window_manager.dart';
 
 class PageSplash extends StatefulWidget {
   const PageSplash({super.key});
@@ -58,7 +60,7 @@ class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
   }
 
   @override
-  FutureOr<void> afterFirstLayout(BuildContext context) {
+  Future<void> afterFirstLayout(BuildContext context) async {
     // Timer(Duration(seconds: 3), () {
     //   setState(() {
     //     _showGoButton = true;

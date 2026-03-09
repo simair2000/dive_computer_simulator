@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:dive_computer_flutter/aPref.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive_ce/hive.dart';
+import 'package:window_manager/window_manager.dart';
 
 class HiveHelper with ChangeNotifier {
   static final HiveHelper _instance = HiveHelper._internal();

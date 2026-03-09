@@ -4,11 +4,13 @@ import 'package:after_layout/after_layout.dart';
 import 'package:dive_computer_flutter/buhlmann.dart';
 import 'package:dive_computer_flutter/define.dart';
 import 'package:dive_computer_flutter/extensions.dart';
+import 'package:dive_computer_flutter/router.dart';
 import 'package:dive_computer_flutter/styles.dart';
 import 'package:dive_computer_flutter/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:go_router/go_router.dart';
 import 'package:window_manager/window_manager.dart';
 
 class PageHome extends StatefulWidget {
@@ -58,12 +60,18 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
         actions: [
           IconButton(
             onPressed: () {
+              context.pushNamed(RoutePage.settings.name);
+            },
+            icon: Icon(Icons.settings, color: Colors.white),
+          ),
+          IconButton(
+            onPressed: () {
               showGetDialog(
                 'About',
                 '- This is a dive computer simulator based on the ZHL-16C algorithm.\n- You can simulate your dive by adjusting the depth.\n- The NDL (No Decompression Limit) and TTS (Time To Surface) will be calculated in real-time based on your current depth and dive time.\n- If you exceed the NDL, the simulator will indicate that you need to perform decompression stops.\n- Please use this simulator responsibly and always follow safe diving practices in real life.',
               );
             },
-            icon: Icon(Icons.help, color: Colors.white, size: 30),
+            icon: Icon(Icons.help, color: Colors.white),
           ),
         ],
       ),
@@ -84,6 +92,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
           _buhlmann.ppo2,
           _buhlmann.updateTick,
           _buhlmann.surfaceTime,
+          _buhlmann.diveCount,
         ]),
         builder: (context, child) {
           return Row(
@@ -100,8 +109,11 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                         children: [
                           Text(
                             DateTime.now().toString().formatDateTime(
-                              'dd-MM-yyyy',
+                              'dd/MM/yyyy',
                             ),
+                          ).color(colorMain).weight(FontWeight.bold).size(18),
+                          Text(
+                            'Dive #${_buhlmann.diveCount.value}',
                           ).color(colorMain).weight(FontWeight.bold).size(18),
                           // Button(
                           //   enable: !_buhlmann.isOnDiving.value,
@@ -118,7 +130,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                       ).marginOnly(bottom: 10),
                       _buhlmann.isOnDiving.value
                           ? Text(
-                              'On Diving...!!',
+                              'Dive Time : ${_buhlmann.currentDiveTime.value.inMinutes}:${(_buhlmann.currentDiveTime.value.inSeconds % 60).toString().padLeft(2, '0')}',
                             ).color(colorMain).weight(FontWeight.bold)
                           : Text(
                               'Surface Time : ${_buhlmann.surfaceTime.value == Duration.zero ? 'First Dive!' : '${_buhlmann.surfaceTime.value.inMinutes}:${(_buhlmann.surfaceTime.value.inSeconds % 60).toString().padLeft(2, '0')}'}',
@@ -438,7 +450,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                                 windowManager.setSize(
                                   Size(
                                     900,
-                                    _showTissueLoadingDetails ? 880 : 600,
+                                    _showTissueLoadingDetails ? 950 : 620,
                                   ),
                                 );
                               });
@@ -504,7 +516,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
   }
 
   @override
-  FutureOr<void> afterFirstLayout(BuildContext context) {}
+  Future<void> afterFirstLayout(BuildContext context) async {}
 
   Widget _horizontalLine() {
     return Container(

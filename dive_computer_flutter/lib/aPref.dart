@@ -2,7 +2,8 @@ import 'package:dive_computer_flutter/hiveHelper.dart';
 
 enum AprefKey {
   LAST_DIVE_DATETIME(0),
-  LAST_LOADING_LIST([]);
+  LAST_LOADING_LIST([]),
+  ALWAYS_ON_TOP(false);
 
   final dynamic defValue;
   const AprefKey(this.defValue);

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:after_layout/after_layout.dart';
+import 'package:dive_computer_flutter/aPref.dart';
 import 'package:dive_computer_flutter/hiveHelper.dart';
 import 'package:dive_computer_flutter/router.dart';
 import 'package:flutter/material.dart';
@@ -14,13 +15,13 @@ Future<void> main() async {
 
   if (GetPlatform.isWindows) {
     WindowOptions windowOptions = const WindowOptions(
-      size: Size(900, 600),
+      size: Size(900, 620),
       center: true,
       // backgroundColor: Colors.white,
       skipTaskbar: false,
       titleBarStyle: TitleBarStyle.normal,
-      alwaysOnTop: true,
-      minimumSize: Size(900, 600),
+      // alwaysOnTop: true,
+      minimumSize: Size(900, 620),
     );
 
     windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -54,6 +55,7 @@ class _MyAppState extends State<MyApp> with AfterLayoutMixin {
   FutureOr<void> afterFirstLayout(BuildContext context) async {
     // HIVE initialization
     await HiveHelper().initialize();
+    await windowManager.setAlwaysOnTop(APref.getData(AprefKey.ALWAYS_ON_TOP));
   }
 
   @override

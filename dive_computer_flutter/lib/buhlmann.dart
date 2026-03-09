@@ -80,8 +80,8 @@ class Buhlmann {
 
   double gfHigh = 0.8; // 고감압 계수 (예시값, 실제로는 다이빙 프로필에 따라 조정 필요)
   double gfLow = 0.2; // 저감압 계수 (예시값, 실제로는 다이빙 프로필에 따라 조정 필요)
-  var gfHighNotifier = ValueNotifier<double>(80); // 고감압 계수 (퍼센트 단위로 표시)
-  var gfLowNotifier = ValueNotifier<double>(20); // 저감압 계수 (퍼센트 단위로 표시)
+  var gfHighNotifier = ValueNotifier<double>(85); // 고감압 계수 (퍼센트 단위로 표시)
+  var gfLowNotifier = ValueNotifier<double>(40); // 저감압 계수 (퍼센트 단위로 표시)
 
   var ppo2 = ValueNotifier<double>(1.4); // 최대 산소 분압
   // var mod = ValueNotifier<double>(0); // Max Of Depth
@@ -112,6 +112,10 @@ class Buhlmann {
 
   // 감압 모드에서의 GF 기준점 고정용 변수
   int _decoAnchorDepth = 0;
+
+  var diveCount = ValueNotifier<int>(0);
+
+  Duration _lastDiveTime = Duration.zero;
 
   Buhlmann() {
     var surfaceTime = getSurfaceTime();
@@ -640,6 +644,10 @@ class Buhlmann {
     }
     // 다이빙 시작 조건
     if (1.2 <= currentDepth.value) {
+      if (isOnDiving.value == false) {
+        // if (15 < _lastDiveTime.inMinutes) {}
+        diveCount.value++;
+      }
       isOnDiving.value = true;
       surfaceTime.value = Duration.zero;
       currentDiveTime.value += Duration(seconds: intervalSeconds.toInt());
@@ -647,6 +655,7 @@ class Buhlmann {
       isOnDiving.value = false;
       tts.value = 0;
       saftyStop.value = Duration.zero;
+      _lastDiveTime = currentDiveTime.value;
       currentDiveTime.value = Duration.zero;
       updateTick.value++;
       surfaceTime.value += Duration(seconds: intervalSeconds.toInt());
