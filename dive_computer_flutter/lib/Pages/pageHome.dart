@@ -13,6 +13,8 @@ import 'package:get/get.dart';
 import 'package:go_router/go_router.dart';
 import 'package:window_manager/window_manager.dart';
 
+enum DiveMoveStatus { onAscending, onDescending, onStop }
+
 class PageHome extends StatefulWidget {
   const PageHome({super.key});
 
@@ -29,6 +31,9 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
   );
 
   bool _showTissueLoadingDetails = false;
+  DiveMoveStatus _currentMoveStatus = DiveMoveStatus.onStop;
+
+  Timer? _moveTimer;
 
   @override
   void initState() {
@@ -44,6 +49,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
 
   @override
   void dispose() {
+    _moveTimer?.cancel();
     _textControllerEAN.dispose();
     _textControllerDepth.dispose();
     _buhlmann.dispose();
@@ -148,15 +154,21 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           IconButton(
-                            tooltip: 'Descend 0.5m',
+                            tooltip: _currentMoveStatus != DiveMoveStatus.onStop
+                                ? 'Stop'
+                                : 'Descend',
                             onPressed: () {
-                              _buhlmann.currentDepth.value += 0.5;
-                              _textControllerDepth.text = _buhlmann
-                                  .currentDepth
-                                  .value
-                                  .toStringAsFixed(1);
+                              _currentMoveStatus != DiveMoveStatus.onStop
+                                  ? _currentMoveStatus = DiveMoveStatus.onStop
+                                  : _currentMoveStatus =
+                                        DiveMoveStatus.onDescending;
                             },
-                            icon: Icon(Icons.thumb_down, color: colorMain),
+                            icon: Icon(
+                              _currentMoveStatus == DiveMoveStatus.onStop
+                                  ? Icons.thumb_down
+                                  : Icons.front_hand,
+                              color: colorMain,
+                            ),
                           ),
                           InputText(
                             width: 100,
@@ -185,19 +197,21 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                             },
                           ).marginSymmetric(horizontal: 20),
                           IconButton(
-                            tooltip: 'Ascend 0.5m',
+                            tooltip: _currentMoveStatus != DiveMoveStatus.onStop
+                                ? 'Stop'
+                                : 'Ascend',
                             onPressed: () {
-                              if (_buhlmann.currentDepth.value <= 0.5) {
-                                _buhlmann.currentDepth.value = 0;
-                              } else {
-                                _buhlmann.currentDepth.value -= 0.5;
-                              }
-                              _textControllerDepth.text = _buhlmann
-                                  .currentDepth
-                                  .value
-                                  .toStringAsFixed(1);
+                              _currentMoveStatus != DiveMoveStatus.onStop
+                                  ? _currentMoveStatus = DiveMoveStatus.onStop
+                                  : _currentMoveStatus =
+                                        DiveMoveStatus.onAscending;
                             },
-                            icon: Icon(Icons.thumb_up, color: colorMain),
+                            icon: Icon(
+                              _currentMoveStatus == DiveMoveStatus.onStop
+                                  ? Icons.thumb_up
+                                  : Icons.front_hand,
+                              color: colorMain,
+                            ),
                           ),
                         ],
                       ).marginOnly(bottom: 10),
@@ -206,7 +220,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                         mainAxisAlignment: MainAxisAlignment.start,
                         children: [
                           SizedBox(
-                            width: 40,
+                            width: 50,
                             child: Text(
                               'PPO2',
                             ).color(colorMain).weight(FontWeight.bold),
@@ -516,7 +530,28 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
   }
 
   @override
-  Future<void> afterFirstLayout(BuildContext context) async {}
+  Future<void> afterFirstLayout(BuildContext context) async {
+    _moveTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+      switch (_currentMoveStatus) {
+        case DiveMoveStatus.onAscending:
+          if (_buhlmann.currentDepth.value <= 0.1) {
+            _buhlmann.currentDepth.value = 0;
+          } else {
+            _buhlmann.currentDepth.value -= 0.1;
+          }
+          _textControllerDepth.text = _buhlmann.currentDepth.value
+              .toStringAsFixed(1);
+          break;
+        case DiveMoveStatus.onDescending:
+          _buhlmann.currentDepth.value += 0.3;
+          _textControllerDepth.text = _buhlmann.currentDepth.value
+              .toStringAsFixed(1);
+          break;
+        case DiveMoveStatus.onStop:
+          break;
+      }
+    });
+  }
 
   Widget _horizontalLine() {
     return Container(

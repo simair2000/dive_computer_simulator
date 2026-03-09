@@ -19,7 +19,7 @@ class _PageSettingsState extends State<PageSettings> {
 
   @override
   void initState() {
-    _currentView = _settingGeneral;
+    _currentView = _settingDiving;
     super.initState();
   }
 
@@ -41,27 +41,6 @@ class _PageSettingsState extends State<PageSettings> {
               child: ListView(
                 children: [
                   ListTile(
-                    tileColor: _currentView == _settingGeneral
-                        ? colorMain.withAlpha(150)
-                        : Colors.transparent,
-                    title: Text('General')
-                        .weight(
-                          _currentView == _settingGeneral
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                        )
-                        .color(
-                          _currentView == _settingGeneral
-                              ? Colors.white
-                              : colorMain,
-                        ),
-                    onTap: () {
-                      setState(() {
-                        _currentView = _settingGeneral;
-                      });
-                    },
-                  ),
-                  ListTile(
                     tileColor: _currentView == _settingDiving
                         ? colorMain.withAlpha(100)
                         : Colors.transparent,
@@ -79,6 +58,27 @@ class _PageSettingsState extends State<PageSettings> {
                     onTap: () {
                       setState(() {
                         _currentView = _settingDiving;
+                      });
+                    },
+                  ),
+                  ListTile(
+                    tileColor: _currentView == _settingGeneral
+                        ? colorMain.withAlpha(150)
+                        : Colors.transparent,
+                    title: Text('General')
+                        .weight(
+                          _currentView == _settingGeneral
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        )
+                        .color(
+                          _currentView == _settingGeneral
+                              ? Colors.white
+                              : colorMain,
+                        ),
+                    onTap: () {
+                      setState(() {
+                        _currentView = _settingGeneral;
                       });
                     },
                   ),

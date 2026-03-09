@@ -647,6 +647,7 @@ class Buhlmann {
       if (isOnDiving.value == false) {
         // if (15 < _lastDiveTime.inMinutes) {}
         diveCount.value++;
+        currentDiveTime.value = Duration.zero;
       }
       isOnDiving.value = true;
       surfaceTime.value = Duration.zero;
@@ -656,7 +657,7 @@ class Buhlmann {
       tts.value = 0;
       saftyStop.value = Duration.zero;
       _lastDiveTime = currentDiveTime.value;
-      currentDiveTime.value = Duration.zero;
+
       updateTick.value++;
       surfaceTime.value += Duration(seconds: intervalSeconds.toInt());
       return false;
@@ -711,6 +712,9 @@ class Buhlmann {
     }
 
     // 4. 반복 다이빙 (하루 3회이상 다이빙을 하거나 수면휴식이 짧은 경우)
+    if (saftyStop.value.inSeconds == 180 && 3 <= diveCount.value) {
+      saftyStop.value += Duration(seconds: 120);
+    }
 
     // <-- 안전정지 2분 추가 조건들
 
