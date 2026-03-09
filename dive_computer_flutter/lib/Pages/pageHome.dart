@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:after_layout/after_layout.dart';
 import 'package:dive_computer_flutter/buhlmann.dart';
 import 'package:dive_computer_flutter/define.dart';
@@ -29,6 +28,9 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
   final TextEditingController _textControllerEAN = TextEditingController(
     text: '21',
   );
+  final TextEditingController _textControllerHe = TextEditingController(
+    text: '0',
+  ); // 헬륨 컨트롤러 추가
 
   bool _showTissueLoadingDetails = false;
   DiveMoveStatus _currentMoveStatus = DiveMoveStatus.onStop;
@@ -37,12 +39,6 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
 
   @override
   void initState() {
-    // _textControllerDepth.addListener(() {
-    //   double? depth = double.tryParse(_textControllerDepth.text);
-    //   if (depth != null && 1.5 <= depth) {
-    //     _buhlmann.startDive();
-    //   }
-    // });
     _buhlmann.startDive();
     super.initState();
   }
@@ -51,6 +47,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
   void dispose() {
     _moveTimer?.cancel();
     _textControllerEAN.dispose();
+    _textControllerHe.dispose();
     _textControllerDepth.dispose();
     _buhlmann.dispose();
     super.dispose();
@@ -74,7 +71,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
             onPressed: () {
               showGetDialog(
                 'About',
-                '- This is a dive computer simulator based on the ZHL-16C algorithm.\n- You can simulate your dive by adjusting the depth.\n- The NDL (No Decompression Limit) and TTS (Time To Surface) will be calculated in real-time based on your current depth and dive time.\n- If you exceed the NDL, the simulator will indicate that you need to perform decompression stops.\n- Please use this simulator responsibly and always follow safe diving practices in real life.',
+                '- This is a dive computer simulator based on the ZHL-16C algorithm.\n- Supports Trimix (He) diving.\n- The NDL and TTS will be calculated in real-time.\n- Please use this simulator responsibly.',
               );
             },
             icon: Icon(Icons.help, color: Colors.white),
@@ -121,17 +118,6 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                           Text(
                             'Dive #${_buhlmann.diveCount.value}',
                           ).color(colorMain).weight(FontWeight.bold).size(18),
-                          // Button(
-                          //   enable: !_buhlmann.isOnDiving.value,
-                          //   onPressed: () {
-                          //     _buhlmann.startDive();
-                          //   },
-                          //   child: Text(
-                          //     _buhlmann.isOnDiving.value
-                          //         ? 'Diving...'
-                          //         : 'Start Dive',
-                          //   ).color(Colors.white),
-                          // ),
                         ],
                       ).marginOnly(bottom: 10),
                       _buhlmann.isOnDiving.value
@@ -229,7 +215,6 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                             child: Text(
                               '${_buhlmann.ppo2.value}',
                             ).color(Colors.white),
-
                             onPressed: () {
                               _buhlmann.ppo2.value = _buhlmann.ppo2.value == 1.4
                                   ? 1.6
@@ -241,17 +226,19 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                           ).color(colorMain).weight(FontWeight.bold),
                         ],
                       ).marginOnly(bottom: 10),
+
+                      // Trimix O2 및 He 설정
                       Row(
                         mainAxisAlignment: MainAxisAlignment.start,
                         children: [
                           SizedBox(
                             width: 40,
                             child: Text(
-                              'EAN',
+                              'O2 %',
                             ).color(colorMain).weight(FontWeight.bold),
                           ),
                           InputText(
-                            width: 100,
+                            width: 60,
                             controller: _textControllerEAN,
                             textAlign: TextAlign.center,
                             inputFormatters: [
@@ -261,9 +248,11 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                             ],
                             maxLines: 1,
                             onFieldSubmitted: (value) {
-                              int? ean = int.tryParse(value);
-                              if (ean != null && ean >= 21 && ean <= 100) {
-                                _buhlmann.setEAN(ean);
+                              int ean = int.tryParse(value) ?? 21;
+                              int he =
+                                  int.tryParse(_textControllerHe.text) ?? 0;
+                              if (ean >= 0 && (ean + he) <= 100) {
+                                _buhlmann.setGas(ean, he);
                               } else {
                                 _textControllerEAN.text =
                                     (_buhlmann.fractionO2 * 100)
@@ -271,7 +260,37 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                                         .toString();
                               }
                             },
-                          ).marginSymmetric(horizontal: 20),
+                          ).marginOnly(right: 20),
+                          SizedBox(
+                            width: 40,
+                            child: Text(
+                              'He %',
+                            ).color(colorMain).weight(FontWeight.bold),
+                          ),
+                          InputText(
+                            width: 60,
+                            controller: _textControllerHe,
+                            textAlign: TextAlign.center,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.allow(
+                                RegExp(r'^\d{0,2}$'),
+                              ),
+                            ],
+                            maxLines: 1,
+                            onFieldSubmitted: (value) {
+                              int he = int.tryParse(value) ?? 0;
+                              int ean =
+                                  int.tryParse(_textControllerEAN.text) ?? 21;
+                              if (he >= 0 && (ean + he) <= 100) {
+                                _buhlmann.setGas(ean, he);
+                              } else {
+                                _textControllerHe.text =
+                                    (_buhlmann.fractionHe * 100)
+                                        .toInt()
+                                        .toString();
+                              }
+                            },
+                          ).marginOnly(right: 20),
                           Image.asset(
                             'assets/air-tank.png',
                             fit: BoxFit.fitHeight,
@@ -279,6 +298,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                           ),
                         ],
                       ).marginOnly(bottom: 10),
+
                       _horizontalLine(),
                       Row(
                         children: [
@@ -447,7 +467,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text('Tissue Saturation (N2 Loadings)')
+                          Text('Tissue Saturation (N2 + He Loadings)')
                               .color(colorMain)
                               .weight(FontWeight.bold)
                               .marginOnly(bottom: 10),
@@ -491,8 +511,11 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                               children: List.generate(
                                 _buhlmann.currentLoadings.length,
                                 (index) {
-                                  double width =
-                                      _buhlmann.currentLoadings[index] * 150;
+                                  // 총 기체 압력 = 질소 압력 + 헬륨 압력
+                                  double pTotal =
+                                      _buhlmann.currentLoadings[index] +
+                                      _buhlmann.currentHeLoadings[index];
+                                  double width = pTotal * 150;
                                   if (450 < width) width = 450;
                                   return Row(
                                     mainAxisAlignment:
@@ -506,8 +529,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                                       Visibility(
                                         visible: _showTissueLoadingDetails,
                                         child: Text(
-                                          _buhlmann.currentLoadings[index]
-                                              .toStringAsFixed(2),
+                                          pTotal.toStringAsFixed(2),
                                         ).color(Colors.white),
                                       ),
                                     ],
