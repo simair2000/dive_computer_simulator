@@ -11,9 +11,9 @@ import 'package:window_manager/window_manager.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await windowManager.ensureInitialized();
 
   if (GetPlatform.isWindows) {
+    await windowManager.ensureInitialized();
     WindowOptions windowOptions = const WindowOptions(
       size: Size(900, 620),
       center: true,
@@ -55,7 +55,9 @@ class _MyAppState extends State<MyApp> with AfterLayoutMixin {
   FutureOr<void> afterFirstLayout(BuildContext context) async {
     // HIVE initialization
     await HiveHelper().initialize();
-    await windowManager.setAlwaysOnTop(APref.getData(AprefKey.ALWAYS_ON_TOP));
+    if (GetPlatform.isWindows) {
+      await windowManager.setAlwaysOnTop(APref.getData(AprefKey.ALWAYS_ON_TOP));
+    }
   }
 
   @override

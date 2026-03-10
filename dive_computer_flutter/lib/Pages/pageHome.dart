@@ -96,6 +96,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
           _buhlmann.updateTick,
           _buhlmann.surfaceTime,
           _buhlmann.diveCount,
+          _buhlmann.currentCNS,
         ]),
         builder: (context, child) {
           return Row(
@@ -125,7 +126,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                               'Dive Time : ${_buhlmann.currentDiveTime.value.inMinutes}:${(_buhlmann.currentDiveTime.value.inSeconds % 60).toString().padLeft(2, '0')}',
                             ).color(colorMain).weight(FontWeight.bold)
                           : Text(
-                              'Surface Time : ${_buhlmann.surfaceTime.value == Duration.zero ? 'First Dive!' : '${_buhlmann.surfaceTime.value.inMinutes}:${(_buhlmann.surfaceTime.value.inSeconds % 60).toString().padLeft(2, '0')}'}',
+                              'Surface Interval : ${_buhlmann.surfaceTime.value == Duration.zero ? 'First Dive!' : '${_buhlmann.surfaceTime.value.inMinutes}:${(_buhlmann.surfaceTime.value.inSeconds % 60).toString().padLeft(2, '0')}'}',
                             ).color(colorMain).weight(FontWeight.bold),
                       _horizontalLine(),
                       SizedBox(
@@ -430,6 +431,20 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                       Text(
                         'PO2 : ${_buhlmann.currentPO2.value.toStringAsFixed(2)} bar',
                       ).color(colorMain).marginOnly(bottom: 5),
+                      Text(
+                            'CNS : ${_buhlmann.currentCNS.value.toStringAsFixed(1)} %',
+                          )
+                          .color(
+                            _buhlmann.currentCNS.value > 80
+                                ? Colors.red
+                                : colorMain,
+                          ) // 80% 이상이면 빨간색 경고
+                          .weight(
+                            _buhlmann.currentCNS.value > 80
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          )
+                          .marginOnly(bottom: 5),
                       Row(
                         children: [
                           Text(
@@ -481,12 +496,14 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                               setState(() {
                                 _showTissueLoadingDetails =
                                     !_showTissueLoadingDetails;
-                                windowManager.setSize(
-                                  Size(
-                                    900,
-                                    _showTissueLoadingDetails ? 950 : 620,
-                                  ),
-                                );
+                                if (GetPlatform.isWindows) {
+                                  windowManager.setSize(
+                                    Size(
+                                      900,
+                                      _showTissueLoadingDetails ? 950 : 620,
+                                    ),
+                                  );
+                                }
                               });
                             },
                           ),
@@ -571,6 +588,9 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
           break;
         case DiveMoveStatus.onStop:
           break;
+      }
+      if (_buhlmann.currentDepth.value == 0) {
+        _currentMoveStatus = DiveMoveStatus.onStop;
       }
     });
   }

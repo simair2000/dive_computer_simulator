@@ -2,6 +2,7 @@ import 'package:dive_computer_flutter/aPref.dart';
 import 'package:dive_computer_flutter/define.dart';
 import 'package:dive_computer_flutter/extensions.dart';
 import 'package:flutter/material.dart';
+import 'package:get/get_utils/src/platform/platform.dart';
 import 'package:window_manager/window_manager.dart';
 
 class PageSettings extends StatefulWidget {
@@ -44,7 +45,7 @@ class _PageSettingsState extends State<PageSettings> {
                     tileColor: _currentView == _settingDiving
                         ? colorMain.withAlpha(100)
                         : Colors.transparent,
-                    title: Text('Diving')
+                    title: Text('Diving Table')
                         .weight(
                           _currentView == _settingDiving
                               ? FontWeight.bold
@@ -103,17 +104,22 @@ class _PageSettingsState extends State<PageSettings> {
   Widget _viewSettingGeneral() {
     return ListView(
       children: [
-        CheckboxListTile(
-          controlAffinity: ListTileControlAffinity.leading,
-          activeColor: colorMain,
-          title: Text('Always on top').color(colorMain),
-          value: APref.getData(AprefKey.ALWAYS_ON_TOP),
-          onChanged: (value) {
-            setState(() {
-              APref.setData(AprefKey.ALWAYS_ON_TOP, value);
-              windowManager.setAlwaysOnTop(value ?? false);
-            });
-          },
+        Visibility(
+          visible: GetPlatform.isWindows,
+          child: CheckboxListTile(
+            controlAffinity: ListTileControlAffinity.leading,
+            activeColor: colorMain,
+            title: Text('Always on top').color(colorMain),
+            value: APref.getData(AprefKey.ALWAYS_ON_TOP),
+            onChanged: (value) {
+              setState(() {
+                APref.setData(AprefKey.ALWAYS_ON_TOP, value);
+                if (GetPlatform.isWindows) {
+                  windowManager.setAlwaysOnTop(value ?? false);
+                }
+              });
+            },
+          ),
         ),
       ],
     );

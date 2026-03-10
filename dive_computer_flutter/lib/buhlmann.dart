@@ -168,6 +168,10 @@ class Buhlmann {
   // PO2
   var currentPO2 = ValueNotifier<double>(0.21);
 
+  // CNS(중추신경계 산소 중독, Central Nervous System Oxygen Toxicity)
+  var currentCNS = ValueNotifier<double>(0.0); // CNS 퍼센트 (0~100% 이상)
+  final double cnsHalfLifeMinutes = 90.0; // 수면에서의 CNS 반감기 (90분)
+
   Timer? _timer;
   var updateTick = ValueNotifier<int>(0);
 
@@ -218,6 +222,66 @@ class Buhlmann {
   void setGas(int newO2, int newHe) {
     EAN = newO2;
     HE = newHe;
+  }
+
+  // NOAA(미국 해양대기청) 산소 노출 한계 기반 1초당 CNS 증가율 계산
+  double getCnsRatePerSecond(double po2) {
+    // PO2가 0.5 이하일 때는 산소 중독이 누적되지 않음
+    if (po2 <= 0.5) return 0.0;
+
+    // NOAA PO2 Table (bar)
+    List<double> po2Table = [
+      0.5,
+      0.6,
+      0.7,
+      0.8,
+      0.9,
+      1.0,
+      1.1,
+      1.2,
+      1.3,
+      1.4,
+      1.5,
+      1.6,
+    ];
+    // 허용 시간 Table (분 단위)
+    List<double> timeTable = [
+      999999,
+      720,
+      570,
+      450,
+      360,
+      300,
+      240,
+      210,
+      180,
+      150,
+      120,
+      45,
+    ];
+
+    double ratePerMinute = 0.0;
+
+    if (po2 >= 1.6) {
+      // 1.6을 초과하는 위험 구간은 1.5~1.6의 기울기를 연장(외삽법)하여 급격히 증가하도록 계산
+      double r1 = 100.0 / 120.0; // 1.5일 때 1분당 오르는 CNS%
+      double r2 = 100.0 / 45.0; // 1.6일 때 1분당 오르는 CNS%
+      double slope = (r2 - r1) / (1.6 - 1.5);
+      ratePerMinute = r2 + slope * (po2 - 1.6);
+    } else {
+      // 0.5 ~ 1.6 구간 사이의 값을 선형 보간법(Linear Interpolation)으로 정밀하게 계산
+      for (int i = 0; i < po2Table.length - 1; i++) {
+        if (po2 >= po2Table[i] && po2 <= po2Table[i + 1]) {
+          double r1 = po2Table[i] == 0.5 ? 0.0 : 100.0 / timeTable[i];
+          double r2 = 100.0 / timeTable[i + 1];
+          double slope = (r2 - r1) / (po2Table[i + 1] - po2Table[i]);
+          ratePerMinute = r1 + slope * (po2 - po2Table[i]);
+          break;
+        }
+      }
+    }
+
+    return ratePerMinute / 60.0; // 1초당 누적량으로 반환
   }
 
   // [수정] N2와 He 모두에 사용 가능한 범용 기체 변화 계산 함수
@@ -593,11 +657,17 @@ class Buhlmann {
       isOnDiving.value = true;
       surfaceTime.value = Duration.zero;
       currentDiveTime.value += Duration(seconds: intervalSeconds.toInt());
+      currentCNS.value +=
+          getCnsRatePerSecond(currentPO2.value) * intervalSeconds;
     } else {
       isOnDiving.value = false;
       tts.value = 0;
       saftyStop.value = Duration.zero;
       _lastDiveTime = currentDiveTime.value;
+
+      double timeMin = intervalSeconds / 60.0;
+      currentCNS.value =
+          currentCNS.value * pow(2.0, -timeMin / cnsHalfLifeMinutes);
 
       updateTick.value++;
       surfaceTime.value += Duration(seconds: intervalSeconds.toInt());

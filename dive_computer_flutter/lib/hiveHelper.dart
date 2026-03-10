@@ -3,7 +3,9 @@ import 'dart:io';
 
 import 'package:dive_computer_flutter/aPref.dart';
 import 'package:flutter/foundation.dart';
+import 'package:get/get_utils/src/platform/platform.dart';
 import 'package:hive_ce/hive.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 class HiveHelper with ChangeNotifier {
@@ -16,8 +18,14 @@ class HiveHelper with ChangeNotifier {
   late Box prefBox;
 
   Future<void> initialize() async {
-    final path = Directory.current.path;
-    Hive.init(path);
+    if (GetPlatform.isWindows) {
+      final path = Directory.current.path;
+      Hive.init(path);
+    } else {
+      final Directory appDocumentsDir =
+          await getApplicationDocumentsDirectory();
+      Hive.init(appDocumentsDir.path);
+    }
     await _openBox();
   }
 
