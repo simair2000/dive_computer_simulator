@@ -63,7 +63,7 @@ const List<double> bCoefficients = [
   0.9650,
 ];
 
-// [추가] ZHL-16C 헬륨 반감기 (단위: 분)
+// ZHL-16C 헬륨 반감기 (단위: 분)
 const List<double> heHalfLives = [
   1.88,
   3.02,
@@ -83,7 +83,7 @@ const List<double> heHalfLives = [
   850.00,
 ];
 
-// [추가] 헬륨 A 계수
+// 헬륨 A 계수
 const List<double> aHeCoefficients = [
   1.7424,
   1.3830,
@@ -103,7 +103,7 @@ const List<double> aHeCoefficients = [
   0.5119,
 ];
 
-// [추가] 헬륨 B 계수
+// 헬륨 B 계수
 const List<double> bHeCoefficients = [
   0.4245,
   0.5747,
@@ -123,16 +123,21 @@ const List<double> bHeCoefficients = [
   0.9267,
 ];
 
+// 시뮬레이션 배속 (기본 1배속)
+int timeMultiplier = 1;
+
 const double intervalSeconds = 1; // 알고리즘 계산 주기 (초 단위)
 const double WATER_VAPOR_PRESSURE = 0.0627; // in bar, at 37°C 폐속 수증기압
 const int NUM_COMPARTMENTS = 16; // Compartment 개수
 
+enum DiveMoveStatus { onAscending, onDescending, onStop }
+
 class Buhlmann {
   List<double> currentLoadings = []; // 질소(N2) 포화도
-  List<double> currentHeLoadings = []; // [추가] 헬륨(He) 포화도
+  List<double> currentHeLoadings = []; // 헬륨(He) 포화도
 
   int EAN = 21; // 산소 비율 (%)
-  int HE = 0; // [추가] 헬륨 비율 (%)
+  int HE = 0; // 헬륨 비율 (%)
 
   double get fractionO2 => EAN / 100.0;
   double get fractionHe => HE / 100.0;
@@ -172,12 +177,17 @@ class Buhlmann {
   var currentCNS = ValueNotifier<double>(0.0); // CNS 퍼센트 (0~100% 이상)
   final double cnsHalfLifeMinutes = 90.0; // 수면에서의 CNS 반감기 (90분)
 
+  var currentPressureGroup = ValueNotifier<String>('-'); // A~Z 표시용
+  double _endDivePgIndex = 0.0; // 수면 휴식 시 반감기 감쇠 계산을 위한 내부 인덱스 값
+
   Timer? _timer;
   var updateTick = ValueNotifier<int>(0);
 
   int _decoAnchorDepth = 0;
   var diveCount = ValueNotifier<int>(0);
   Duration _lastDiveTime = Duration.zero;
+
+  DiveMoveStatus _currentMoveStatus = DiveMoveStatus.onStop;
 
   Buhlmann() {
     var surfaceTime = getSurfaceTime();
@@ -218,7 +228,7 @@ class Buhlmann {
     _timer?.cancel();
   }
 
-  // [수정] 혼합 가스 설정
+  // 혼합 가스 설정
   void setGas(int newO2, int newHe) {
     EAN = newO2;
     HE = newHe;
@@ -284,7 +294,25 @@ class Buhlmann {
     return ratePerMinute / 60.0; // 1초당 누적량으로 반환
   }
 
-  // [수정] N2와 He 모두에 사용 가능한 범용 기체 변화 계산 함수
+  // 시뮬레이션 배속 설정 함수
+  void setSpeed(int multiplier) {
+    if (multiplier < 1) multiplier = 1;
+    timeMultiplier = multiplier;
+
+    // 이미 타이머가 돌고 있다면 취소하고 새로운 배속으로 재시작
+    if (_timer != null && _timer!.isActive) {
+      _timer?.cancel();
+      _timer = Timer.periodic(
+        // 예: 10배속이면 1000 / 10 = 100ms 마다 1초치 연산 수행
+        Duration(milliseconds: 1000 ~/ timeMultiplier),
+        (timer) {
+          processCycle();
+        },
+      );
+    }
+  }
+
+  // N2와 He 모두에 사용 가능한 범용 기체 변화 계산 함수
   void updateGasLoadingsSchreiner(
     List<double> loadings,
     double depth,
@@ -337,7 +365,7 @@ class Buhlmann {
     return Duration(milliseconds: now - lastDiveTime);
   }
 
-  // [수정] 역계산이 아닌 1분 단위 Look-ahead 시뮬레이션 방식의 완벽한 혼합가스 NDL
+  // 역계산이 아닌 1분 단위 Look-ahead 시뮬레이션 방식의 완벽한 혼합가스 NDL
   double calculateNDL() {
     // 1. 너무 얕은 수심(예: 1.2m 미만)에서는 NDL이 무한대(99)
     if (currentDepth.value < 1.2) return 999.0;
@@ -583,7 +611,7 @@ class Buhlmann {
     return distM / rateMMin;
   }
 
-  // [수정] 질소와 헬륨의 가중 평균 허용치를 계산 (Trimix 지원)
+  // 질소와 헬륨의 가중 평균 허용치를 계산 (Trimix 지원)
   bool isDepthSafe(
     double depthToCheck,
     List<double> n2Loadings,
@@ -615,7 +643,67 @@ class Buhlmann {
     return true;
   }
 
+  // [추가] 실시간 ZHL-16C 조직 포화도 기반 멀티레벨 압력군(A~Z) 계산
+  void calculatePressureGroup() {
+    double maxRatio = 0.0;
+
+    // 대기압(1.0 bar) 하에서의 수증기압을 제외한 순수 불활성기체(질소) 기본 압력 (약 0.7404 bar)
+    // 이 상태가 다이빙을 하지 않은 '0%' 상태입니다.
+    double pBase = (1.0 - WATER_VAPOR_PRESSURE) * 0.79;
+
+    for (int i = 0; i < NUM_COMPARTMENTS; i++) {
+      double pN2 = currentLoadings[i];
+      double pHe = currentHeLoadings[i];
+      double pTotal = pN2 + pHe;
+
+      // 체내 압력이 기본 대기압 상태보다 같거나 낮으면 무시
+      if (pTotal <= pBase) continue;
+
+      // 해당 조직의 혼합 A, B 계수 산출
+      double aMix =
+          ((aCoefficients[i] * pN2) + (aHeCoefficients[i] * pHe)) / pTotal;
+      double bMix =
+          ((bCoefficients[i] * pN2) + (bHeCoefficients[i] * pHe)) / pTotal;
+
+      // 수면(0m, P_amb = 1.0)으로 올라왔을 때의 허용 한계치(M-Value) 계산
+      double mPure = aMix + (1.0 / bMix);
+
+      // 사용자가 설정한 보수성(GF High)을 적용한 최종 수면 허용 한계치
+      double m0Gf = 1.0 + gfHigh * (mPure - 1.0);
+
+      // 현재 조직의 포화 비율 계산 (0.0 = 기본 상태, 1.0 = 무감압 한계 도달)
+      double ratio = (pTotal - pBase) / (m0Gf - pBase);
+
+      // 16개 조직 중 가장 비율이 높은(위험한) 조직을 기준으로 삼음
+      if (ratio > maxRatio) {
+        maxRatio = ratio;
+      }
+    }
+
+    // 0.0 ~ 1.0 의 비율을 26개 알파벳(A~Z) 스텝으로 변환
+    int pgIdx = (maxRatio * 26).ceil();
+
+    if (pgIdx <= 0) {
+      currentPressureGroup.value = '-'; // 안전(기본) 상태
+    } else if (pgIdx > 26) {
+      currentPressureGroup.value =
+          'OOR (Out Of Range - DECO)'; // 무감압 한계 초과 (DECO 진입)
+    } else {
+      currentPressureGroup.value = String.fromCharCode(
+        64 + pgIdx,
+      ); // 1=A, 2=B, 26=Z
+    }
+  }
+
   bool processCycle() {
+    if (prevDepth < currentDepth.value) {
+      _currentMoveStatus = DiveMoveStatus.onDescending;
+    } else if (currentDepth.value < prevDepth) {
+      _currentMoveStatus = DiveMoveStatus.onAscending;
+    } else {
+      _currentMoveStatus = DiveMoveStatus.onStop;
+    }
+
     checkSaftyStop();
 
     currentPO2.value =
@@ -643,6 +731,8 @@ class Buhlmann {
     tts.value = calculateTTS();
     calculateDecoStop();
 
+    calculatePressureGroup();
+
     prevDepth = currentDepth.value;
 
     if (currentDepth.value > maxDepth.value) {
@@ -659,6 +749,23 @@ class Buhlmann {
       currentDiveTime.value += Duration(seconds: intervalSeconds.toInt());
       currentCNS.value +=
           getCnsRatePerSecond(currentPO2.value) * intervalSeconds;
+
+      // 다이빙 중 PADI 압력군 계산 (Table 1 룩업)
+      // 다이빙 중에는 항상 '최대 수심'과 '현재까지의 다이빙 시간'을 기준으로 산출합니다.
+      // int mins = (currentDiveTime.value.inSeconds / 60.0).ceil();
+      // int pgIdx = PadiRdp.getPgIndex(currentDepth.value, mins);
+      // _endDivePgIndex = pgIdx.toDouble(); // 상승 후 감쇠 계산을 위해 저장
+
+      // if (pgIdx == 0) {
+      //   currentPressureGroup.value = '-';
+      // } else if (pgIdx > 26) {
+      //   currentPressureGroup.value =
+      //       'OOR(Out Of Range)'; // Out Of Range (한계 초과)
+      // } else {
+      //   currentPressureGroup.value = String.fromCharCode(
+      //     64 + pgIdx,
+      //   ); // 1=A, 2=B...
+      // }
     } else {
       isOnDiving.value = false;
       tts.value = 0;
@@ -668,6 +775,23 @@ class Buhlmann {
       double timeMin = intervalSeconds / 60.0;
       currentCNS.value =
           currentCNS.value * pow(2.0, -timeMin / cnsHalfLifeMinutes);
+
+      // 수면 휴식 중 PADI 압력군 감소 (Table 2 기반 60분 반감기 로직)
+      // if (_endDivePgIndex > 0) {
+      //   // PADI RDP Table 2는 정확히 60분 반감기 곡선을 그립니다.
+      //   double currentIdx = _endDivePgIndex * pow(2.0, -timeMin / 60.0);
+      //   _endDivePgIndex = currentIdx; // 매초마다 서서히 감소됨
+
+      //   int roundIdx = currentIdx.round();
+      //   if (roundIdx < 1) {
+      //     currentPressureGroup.value = '-';
+      //     _endDivePgIndex = 0.0; // 체내 잔류 질소(RDP 기준) 완전 초기화
+      //   } else if (roundIdx > 26) {
+      //     currentPressureGroup.value = 'OOR(Out Of Range)';
+      //   } else {
+      //     currentPressureGroup.value = String.fromCharCode(64 + roundIdx);
+      //   }
+      // }
 
       updateTick.value++;
       surfaceTime.value += Duration(seconds: intervalSeconds.toInt());
@@ -682,7 +806,8 @@ class Buhlmann {
     if (isOnDiving.value) return;
     isOnDiving.value = true;
     currentDiveTime.value = Duration.zero;
-    _timer = Timer.periodic(Duration(seconds: intervalSeconds.toInt()), (
+    _timer?.cancel();
+    _timer = Timer.periodic(Duration(milliseconds: 1000 ~/ timeMultiplier), (
       timer,
     ) {
       processCycle();
@@ -706,7 +831,9 @@ class Buhlmann {
         saftyStop.value += Duration(seconds: 120);
       }
     }
-    if (saftyStop.value.inSeconds == 180 && 3 <= diveCount.value) {
+    if (_currentMoveStatus == DiveMoveStatus.onDescending &&
+        saftyStop.value.inSeconds == 180 &&
+        3 <= diveCount.value) {
       saftyStop.value += Duration(seconds: 120);
     }
 
@@ -716,5 +843,352 @@ class Buhlmann {
       saftyStop.value = saftyStop.value - Duration(seconds: 1);
       if (saftyStop.value.inSeconds < 0) saftyStop.value = Duration.zero;
     }
+  }
+}
+
+// PADI RDP (Metric) Table 1 매핑 헬퍼 클래스
+class PadiRdp {
+  // 기준 수심 (m) - 실제 수심이 이 값들 사이에 있으면 무조건 더 깊은 수심으로 올림 처리
+  static final List<int> depths = [10, 12, 14, 16, 18, 20, 22, 25, 30, 35, 40];
+
+  // 각 수심별 압력군(A~Z) 최대 허용 시간(분)
+  // 0은 해당 수심에서 도달 불가능한(NDL 초과) 영역
+  static final List<List<int>> times = [
+    // A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z
+    [
+      10,
+      19,
+      25,
+      29,
+      32,
+      36,
+      40,
+      44,
+      48,
+      52,
+      57,
+      62,
+      67,
+      73,
+      79,
+      85,
+      92,
+      100,
+      108,
+      117,
+      127,
+      139,
+      152,
+      170,
+      188,
+      219,
+    ], // 10m
+    [
+      9,
+      16,
+      22,
+      25,
+      27,
+      31,
+      34,
+      37,
+      40,
+      44,
+      48,
+      51,
+      55,
+      60,
+      64,
+      68,
+      73,
+      79,
+      85,
+      92,
+      100,
+      108,
+      118,
+      130,
+      147,
+      0,
+    ], // 12m
+    [
+      8,
+      14,
+      19,
+      22,
+      24,
+      27,
+      29,
+      32,
+      35,
+      38,
+      42,
+      45,
+      48,
+      52,
+      56,
+      61,
+      65,
+      70,
+      75,
+      82,
+      88,
+      98,
+      0,
+      0,
+      0,
+      0,
+    ], // 14m
+    [
+      7,
+      12,
+      17,
+      19,
+      21,
+      24,
+      26,
+      28,
+      31,
+      34,
+      37,
+      40,
+      43,
+      47,
+      50,
+      54,
+      59,
+      63,
+      68,
+      72,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+    ], // 16m
+    [
+      6,
+      11,
+      15,
+      17,
+      19,
+      21,
+      23,
+      25,
+      27,
+      30,
+      32,
+      35,
+      38,
+      41,
+      44,
+      48,
+      52,
+      56,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+    ], // 18m
+    [
+      5,
+      9,
+      13,
+      15,
+      17,
+      19,
+      21,
+      23,
+      25,
+      27,
+      29,
+      32,
+      34,
+      37,
+      40,
+      43,
+      45,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+    ], // 20m
+    [
+      4,
+      8,
+      11,
+      13,
+      15,
+      17,
+      18,
+      20,
+      22,
+      24,
+      26,
+      28,
+      30,
+      32,
+      35,
+      37,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+    ], // 22m
+    [
+      3,
+      7,
+      10,
+      12,
+      13,
+      15,
+      17,
+      18,
+      20,
+      21,
+      23,
+      25,
+      27,
+      29,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+    ], // 25m
+    [
+      0,
+      5,
+      7,
+      9,
+      10,
+      11,
+      13,
+      14,
+      15,
+      17,
+      18,
+      19,
+      20,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+    ], // 30m
+    [
+      0,
+      3,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+    ], // 35m
+    [
+      0,
+      0,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+    ], // 40m
+  ];
+
+  static int getPgIndex(double maxDepthMeters, int diveTimeMins) {
+    if (maxDepthMeters < 1.5 || diveTimeMins <= 0) return 0;
+
+    // 1. 해당되는 수심 찾기 (수심 올림 규정 적용)
+    int targetDepthIdx = -1;
+    for (int i = 0; i < depths.length; i++) {
+      if (maxDepthMeters <= depths[i]) {
+        targetDepthIdx = i;
+        break;
+      }
+    }
+
+    // 40m 초과 시 OOR (Out Of Range)
+    if (targetDepthIdx == -1) return 27;
+
+    // 2. 해당 수심의 시간 배열에서 그룹 찾기
+    List<int> row = times[targetDepthIdx];
+    for (int i = 0; i < row.length; i++) {
+      if (row[i] == 0) continue;
+      if (diveTimeMins <= row[i]) {
+        return i + 1; // 1=A, 2=B, 3=C... 반환
+      }
+    }
+
+    return 27; // NDL을 넘긴 경우 OOR
   }
 }

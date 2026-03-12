@@ -12,8 +12,6 @@ import 'package:get/get.dart';
 import 'package:go_router/go_router.dart';
 import 'package:window_manager/window_manager.dart';
 
-enum DiveMoveStatus { onAscending, onDescending, onStop }
-
 class PageHome extends StatefulWidget {
   const PageHome({super.key});
 
@@ -36,6 +34,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
   DiveMoveStatus _currentMoveStatus = DiveMoveStatus.onStop;
 
   Timer? _moveTimer;
+  int _currentSpeed = 1; // 현재 배속 상태 변수
 
   @override
   void initState() {
@@ -97,6 +96,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
           _buhlmann.surfaceTime,
           _buhlmann.diveCount,
           _buhlmann.currentCNS,
+          _buhlmann.currentPressureGroup,
         ]),
         builder: (context, child) {
           return Row(
@@ -121,12 +121,62 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                           ).color(colorMain).weight(FontWeight.bold).size(18),
                         ],
                       ).marginOnly(bottom: 10),
+                      Row(
+                        children: [
+                          Text('Speed : ')
+                              .color(colorMain)
+                              .weight(FontWeight.bold)
+                              .marginOnly(right: 10),
+                          Button(
+                            width: 60,
+                            child: Text('1x').color(
+                              _currentSpeed == 1 ? Colors.white : colorMain,
+                            ),
+                            color: _currentSpeed == 1
+                                ? colorMain
+                                : Colors.grey.withAlpha(50),
+                            onPressed: () => _setSimulationSpeed(1),
+                          ).marginOnly(right: 5),
+                          Button(
+                            width: 60,
+                            child: Text('5x').color(
+                              _currentSpeed == 5 ? Colors.white : colorMain,
+                            ),
+                            color: _currentSpeed == 5
+                                ? colorMain
+                                : Colors.grey.withAlpha(50),
+                            onPressed: () => _setSimulationSpeed(5),
+                          ).marginOnly(right: 5),
+                          Button(
+                            width: 60,
+                            child: Text('10x').color(
+                              _currentSpeed == 10 ? Colors.white : colorMain,
+                            ),
+                            color: _currentSpeed == 10
+                                ? colorMain
+                                : Colors.grey.withAlpha(50),
+                            onPressed: () => _setSimulationSpeed(10),
+                          ).marginOnly(right: 5),
+                          Button(
+                            width: 60,
+                            child: Text('60x').color(
+                              _currentSpeed == 60 ? Colors.white : colorMain,
+                            ),
+                            color: _currentSpeed == 60
+                                ? colorMain
+                                : Colors.grey.withAlpha(50),
+                            onPressed: () => _setSimulationSpeed(
+                              60,
+                            ), // 60배속: 현실 1초 = 시뮬레이션 1분
+                          ),
+                        ],
+                      ).marginOnly(bottom: 10),
                       _buhlmann.isOnDiving.value
                           ? Text(
-                              'Dive Time : ${_buhlmann.currentDiveTime.value.inMinutes}:${(_buhlmann.currentDiveTime.value.inSeconds % 60).toString().padLeft(2, '0')}',
+                              'Dive Time : ${_buhlmann.currentDiveTime.value.hhmmss()}',
                             ).color(colorMain).weight(FontWeight.bold)
                           : Text(
-                              'Surface Interval : ${_buhlmann.surfaceTime.value == Duration.zero ? 'First Dive!' : '${_buhlmann.surfaceTime.value.inMinutes}:${(_buhlmann.surfaceTime.value.inSeconds % 60).toString().padLeft(2, '0')}'}',
+                              'Surface Interval : ${_buhlmann.surfaceTime.value.hhmmss()}',
                             ).color(colorMain).weight(FontWeight.bold),
                       _horizontalLine(),
                       SizedBox(
@@ -445,6 +495,21 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                                 : FontWeight.normal,
                           )
                           .marginOnly(bottom: 5),
+                      // PADI RDP 압력군 (Pressure Group) 뱃지
+                      Row(
+                        children: [
+                          Text('Pressure Group : ').color(colorMain),
+                          Text(_buhlmann.currentPressureGroup.value)
+                              .color(
+                                _buhlmann.currentPressureGroup.value.startsWith(
+                                      'OOR',
+                                    )
+                                    ? Colors.red
+                                    : colorMain,
+                              )
+                              .size(15),
+                        ],
+                      ).marginOnly(bottom: 5),
                       Row(
                         children: [
                           Text(
@@ -500,7 +565,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                                   windowManager.setSize(
                                     Size(
                                       900,
-                                      _showTissueLoadingDetails ? 950 : 620,
+                                      _showTissueLoadingDetails ? 950 : 650,
                                     ),
                                   );
                                 }
@@ -570,11 +635,25 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
 
   @override
   Future<void> afterFirstLayout(BuildContext context) async {
-    _moveTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+    _setSimulationSpeed(1);
+  }
+
+  void _setSimulationSpeed(int speed) {
+    setState(() {
+      _currentSpeed = speed;
+    });
+
+    // 1. 알고리즘 배속 적용
+    _buhlmann.setSpeed(speed);
+
+    // 2. 수심 상승/하강 타이머도 배속 적용
+    _moveTimer?.cancel();
+    _moveTimer = Timer.periodic(Duration(milliseconds: 1000 ~/ speed), (timer) {
       switch (_currentMoveStatus) {
         case DiveMoveStatus.onAscending:
           if (_buhlmann.currentDepth.value <= 0.1) {
             _buhlmann.currentDepth.value = 0;
+            _currentMoveStatus = DiveMoveStatus.onStop; // 수면 도착 시 정지
           } else {
             _buhlmann.currentDepth.value -= 0.1;
           }
@@ -588,9 +667,6 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
           break;
         case DiveMoveStatus.onStop:
           break;
-      }
-      if (_buhlmann.currentDepth.value == 0) {
-        _currentMoveStatus = DiveMoveStatus.onStop;
       }
     });
   }
