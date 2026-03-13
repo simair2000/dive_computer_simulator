@@ -4,7 +4,9 @@ enum AprefKey {
   LAST_DIVE_DATETIME(0),
   LAST_N2_LOADING_LIST([]),
   LAST_HE_LOADING_LIST([]),
-  ALWAYS_ON_TOP(false);
+  ALWAYS_ON_TOP(false),
+  CYLINDER(11.0),
+  RMV(20.0);
 
   final dynamic defValue;
   const AprefKey(this.defValue);

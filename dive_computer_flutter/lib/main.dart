@@ -5,6 +5,7 @@ import 'package:dive_computer_flutter/aPref.dart';
 import 'package:dive_computer_flutter/hiveHelper.dart';
 import 'package:dive_computer_flutter/router.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
@@ -30,12 +31,17 @@ Future<void> main() async {
     });
   }
 
-  runApp(
-    MultiProvider(
-      providers: [ChangeNotifierProvider(create: (_) => HiveHelper())],
-      child: MyApp(),
-    ),
-  );
+  SystemChrome.setPreferredOrientations([
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ]).then((value) {
+    runApp(
+      MultiProvider(
+        providers: [ChangeNotifierProvider(create: (_) => HiveHelper())],
+        child: MyApp(),
+      ),
+    );
+  });
 }
 
 class MyApp extends StatefulWidget {
