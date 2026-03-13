@@ -5,12 +5,12 @@ import 'buhlmann.dart'; // n2HalfLives, aCoefficients 등 상수 임포트
 enum GasPurpose { bottom, deco } // 바닥 체류용 vs 감압용
 
 class Cylinder {
-  final String name; // 예: "Air", "EAN50", "O2", "Tx 18/45"
-  final double volume; // 리터 (예: 11.1L = AL80)
-  final int count; // 탱크 갯수 (더블탱크 = 2, 데코탱크 = 1)
+  final String name;
+  final double volume; // 리터 (예: 11.1L)
+  final int count; // 탱크 갯수
   final double startPressure; // 시작 압력 (bar)
-  final double fractionO2; // 산소 비율 (0.21 ~ 1.0)
-  final double fractionHe; // 헬륨 비율 (0.0 ~ 1.0)
+  final double fractionO2;
+  final double fractionHe;
   final GasPurpose purpose;
 
   Cylinder({
@@ -23,20 +23,17 @@ class Cylinder {
     this.purpose = GasPurpose.bottom,
   });
 
-  // 감압 기체 최대 허용 수심 (PO2 1.6 기준)
   double get decoMod => ((1.6 / fractionO2) * 10) - 10;
-  // 바닥 기체 최대 허용 수심 (PO2 1.4 기준)
   double get bottomMod => ((1.4 / fractionO2) * 10) - 10;
-  // 총 보유 가스량 (리터)
   double get totalLiters => volume * count * startPressure;
 }
 
 /// 2. 플래너 입력 데이터 모델
 class DivePlanInput {
-  final double targetDepth; // 목표 수심 (m)
-  final int bottomTime; // 바닥 체류 시간 (분, 하강 시간 포함)
-  final double rmv; // 분당 기체 소모량 (L/min)
-  final List<Cylinder> cylinders; // 사용할 모든 탱크 리스트
+  final double targetDepth;
+  final int bottomTime;
+  final double rmv;
+  final List<Cylinder> cylinders;
 
   DivePlanInput({
     required this.targetDepth,
@@ -48,12 +45,11 @@ class DivePlanInput {
 
 /// 3. 다이빙 프로필 단계(Step) 모델
 class DiveStep {
-  final String
-  phase; // "Descent", "Bottom", "Ascent", "Deco Stop", "Gas Switch"
-  final int depth; // 해당 단계가 끝나는 수심 (m)
-  final int time; // 소요 시간 (분)
-  final Cylinder gasUsed; // 사용한 기체
-  final double gasConsumedLiters; // 소모된 가스량 (L)
+  final String phase;
+  final int depth;
+  final int time;
+  final Cylinder gasUsed;
+  final double gasConsumedLiters;
 
   DiveStep(
     this.phase,
@@ -68,10 +64,10 @@ class DiveStep {
 class DivePlanResult {
   final bool isFeasible;
   final List<String> warnings;
-  final List<DiveStep> profile; // 전체 다이빙 프로필 (가스 스위칭 포함)
-  final Map<Cylinder, double> gasConsumption; // 탱크별 소모된 가스량 (Liters)
-  final Map<Cylinder, int> remainingPressure; // 탱크별 남은 압력 (bar)
-  final int totalDiveTime; // 총 다이빙 시간 (분)
+  final List<DiveStep> profile;
+  final Map<Cylinder, double> gasConsumption;
+  final Map<Cylinder, int> remainingPressure;
+  final int totalDiveTime;
 
   DivePlanResult({
     required this.isFeasible,
@@ -87,6 +83,7 @@ class DivePlanResult {
 class DivePlanner {
   final double gfHigh;
   final double gfLow;
+  final double switchPressureBar = 50.0; // 탱크 교체를 유도할 최소 잔압 임계점 (50 bar)
 
   DivePlanner({this.gfHigh = 0.85, this.gfLow = 0.30});
 
@@ -98,19 +95,19 @@ class DivePlanner {
       for (var c in input.cylinders) c: 0.0,
     };
 
-    // 1. 바닥 기체 찾기 (Bottom 목적 중 가장 적합한 기체)
-    Cylinder? bottomGas = _getBestBottomGas(input.cylinders, input.targetDepth);
-    if (bottomGas == null) {
-      warnings.add(
-        "ERROR: 해당 수심(${input.targetDepth}m)에 적합한 바닥 기체(Bottom Gas)가 없습니다.",
-      );
+    // 1. 초기 바닥 기체 찾기
+    Cylinder? currentGas = _getBestBottomGas(
+      input.cylinders,
+      input.targetDepth,
+      gasConsumption,
+    );
+    if (currentGas == null) {
+      warnings.add("ERROR: 해당 수심(${input.targetDepth}m)에 적합한 가스가 없습니다.");
       return _failResult(warnings);
     }
 
-    if (bottomGas.bottomMod < input.targetDepth) {
-      warnings.add(
-        "WARNING: 목표 수심이 바닥 기체의 MOD(${bottomGas.bottomMod.toStringAsFixed(1)}m)를 초과합니다. (PO2 > 1.4)",
-      );
+    if (currentGas.bottomMod < input.targetDepth) {
+      warnings.add("WARNING: 목표 수심이 첫 기체의 MOD를 초과합니다. (PO2 > 1.4)");
       isFeasible = false;
     }
 
@@ -131,52 +128,93 @@ class DivePlanner {
       0.0,
       input.targetDepth,
       descentTime.toDouble(),
-      bottomGas,
+      currentGas,
     );
     double descentGas =
         descentTime * input.rmv * (1.0 + avgDescentDepth / 10.0);
-    gasConsumption[bottomGas] = gasConsumption[bottomGas]! + descentGas;
+    gasConsumption[currentGas] = gasConsumption[currentGas]! + descentGas;
     profile.add(
       DiveStep(
         "Descent",
         input.targetDepth.toInt(),
         descentTime,
-        bottomGas,
+        currentGas,
         descentGas,
       ),
     );
 
-    // 4. 바닥 체류 (Bottom)
+    // 4. 바닥 체류 (Bottom) - 1분 단위 시뮬레이션 (다중 탱크 교체 지원)
     int actualBottomTime = input.bottomTime - descentTime;
     if (actualBottomTime < 1) actualBottomTime = 1;
 
-    _simulateGasExchange(
-      simN2,
-      simHe,
-      input.targetDepth,
-      input.targetDepth,
-      actualBottomTime.toDouble(),
-      bottomGas,
-    );
-    double bottomGasUsed =
-        actualBottomTime * input.rmv * (1.0 + input.targetDepth / 10.0);
-    gasConsumption[bottomGas] = gasConsumption[bottomGas]! + bottomGasUsed;
-    profile.add(
-      DiveStep(
-        "Bottom",
-        input.targetDepth.toInt(),
-        actualBottomTime,
-        bottomGas,
-        bottomGasUsed,
-      ),
-    );
+    int phaseTime = 0;
+    double phaseGasUsed = 0.0;
+
+    for (int i = 0; i < actualBottomTime; i++) {
+      // 매 분마다 현재 가스의 잔압 체크, 50bar 이하면 다음 동일 가스 탱크로 스위칭
+      if (_getRemainBar(currentGas!, gasConsumption) <= switchPressureBar) {
+        Cylinder? nextGas = _getBestBottomGas(
+          input.cylinders,
+          input.targetDepth,
+          gasConsumption,
+        );
+
+        if (nextGas != null && nextGas != currentGas) {
+          // 스위칭 전까지의 기록 저장
+          if (phaseTime > 0)
+            profile.add(
+              DiveStep(
+                "Bottom",
+                input.targetDepth.toInt(),
+                phaseTime,
+                currentGas,
+                phaseGasUsed,
+              ),
+            );
+          phaseTime = 0;
+          phaseGasUsed = 0.0;
+          currentGas = nextGas; // 기체 교체
+          profile.add(
+            DiveStep(
+              "Gas Switch",
+              input.targetDepth.toInt(),
+              0,
+              currentGas,
+              0.0,
+            ),
+          );
+        }
+      }
+
+      // 1분 소모
+      _simulateGasExchange(
+        simN2,
+        simHe,
+        input.targetDepth,
+        input.targetDepth,
+        1.0,
+        currentGas,
+      );
+      double minGas = input.rmv * (1.0 + input.targetDepth / 10.0);
+      gasConsumption[currentGas] = gasConsumption[currentGas]! + minGas;
+      phaseTime++;
+      phaseGasUsed += minGas;
+    }
+    if (phaseTime > 0)
+      profile.add(
+        DiveStep(
+          "Bottom",
+          input.targetDepth.toInt(),
+          phaseTime,
+          currentGas!,
+          phaseGasUsed,
+        ),
+      );
 
     // 5. 상승 및 감압 (Ascent & Deco)
     int currentSimDepth = input.targetDepth.toInt();
-    Cylinder currentGas = bottomGas;
     int totalTime = descentTime + actualBottomTime;
 
-    // 감압 기준 수심 (최초 감압 정지 수심) - GF 보간용
     int anchorDepth = 0;
     for (int d = 3; d <= currentSimDepth; d += 3) {
       if (!_isSafe(d.toDouble(), simN2, simHe, gfLow)) {
@@ -187,17 +225,7 @@ class DivePlanner {
     if (anchorDepth == 0) anchorDepth = (currentSimDepth / 3).ceil() * 3;
     double gfSlope = (gfHigh - gfLow) / (0.0 - anchorDepth.toDouble());
 
-    // 수면(0m)에 도달할 때까지 3m씩 상승
     while (currentSimDepth > 0) {
-      // --- 가스 스위칭 체크 (Deco Gas) ---
-      Cylinder? bestDecoGas = _getBestDecoGas(input.cylinders, currentSimDepth);
-      if (bestDecoGas != null && bestDecoGas != currentGas) {
-        currentGas = bestDecoGas;
-        profile.add(
-          DiveStep("Gas Switch", currentSimDepth, 0, currentGas, 0.0),
-        );
-      }
-
       int nextDepth = currentSimDepth - 3;
       if (nextDepth < 0) nextDepth = 0;
 
@@ -205,44 +233,71 @@ class DivePlanner {
       if (targetGf > gfHigh) targetGf = gfHigh;
       if (targetGf < gfLow) targetGf = gfLow;
 
-      int stopTimeAtCurrentDepth = 0;
+      phaseTime = 0;
+      phaseGasUsed = 0.0;
 
-      // 다음 수심으로 올라갈 수 있을 때까지 현재 수심에서 대기 (1분 단위 시뮬레이션)
+      // 현재 수심에서 감압 대기 (1분 단위 루프)
       while (true) {
-        // 목표 수심(nextDepth)이 안전한지 확인
-        if (_isSafe(nextDepth.toDouble(), simN2, simHe, targetGf)) {
-          break; // 안전하면 루프 탈출 후 상승
+        if (_isSafe(nextDepth.toDouble(), simN2, simHe, targetGf))
+          break; // 상승 가능
+
+        // 감압 중에도 최적의 가스(또는 잔압이 있는 동일 가스)가 있는지 매 분마다 확인
+        Cylinder? bestDecoGas = _getBestDecoGas(
+          input.cylinders,
+          currentSimDepth.toDouble(),
+          gasConsumption,
+        );
+        // 더 좋은 가스가 있거나, 현재 가스가 50bar 이하라 동일한 다른 탱크로 스위치 해야 할 때
+        if (bestDecoGas != null && bestDecoGas != currentGas) {
+          if (phaseTime > 0) {
+            profile.add(
+              DiveStep(
+                "Deco Stop",
+                currentSimDepth,
+                phaseTime,
+                currentGas!,
+                phaseGasUsed,
+              ),
+            );
+          }
+          phaseTime = 0;
+          phaseGasUsed = 0.0;
+          currentGas = bestDecoGas;
+          profile.add(
+            DiveStep("Gas Switch", currentSimDepth, 0, currentGas, 0.0),
+          );
         }
-        // 안전하지 않으면 1분간 감압 정지
+
+        // 1분 대기 및 소모
         _simulateGasExchange(
           simN2,
           simHe,
           currentSimDepth.toDouble(),
           currentSimDepth.toDouble(),
           1.0,
-          currentGas,
+          currentGas!,
         );
-        stopTimeAtCurrentDepth++;
+        double minGas = input.rmv * (1.0 + currentSimDepth / 10.0);
+        gasConsumption[currentGas] = gasConsumption[currentGas]! + minGas;
+        phaseTime++;
+        phaseGasUsed += minGas;
+        totalTime++;
       }
 
       // 감압 정지 기록
-      if (stopTimeAtCurrentDepth > 0) {
-        double stopGasUsed =
-            stopTimeAtCurrentDepth * input.rmv * (1.0 + currentSimDepth / 10.0);
-        gasConsumption[currentGas] = gasConsumption[currentGas]! + stopGasUsed;
+      if (phaseTime > 0) {
         profile.add(
           DiveStep(
             "Deco Stop",
             currentSimDepth,
-            stopTimeAtCurrentDepth,
-            currentGas,
-            stopGasUsed,
+            phaseTime,
+            currentGas!,
+            phaseGasUsed,
           ),
         );
-        totalTime += stopTimeAtCurrentDepth;
       }
 
-      // 3m 상승 이동 (10m/min 속도 가정 -> 3m 이동에 약 0.3분)
+      // 3m 상승 이동 (약 0.3분)
       double travelTime = 3.0 / 10.0;
       _simulateGasExchange(
         simN2,
@@ -250,15 +305,14 @@ class DivePlanner {
         currentSimDepth.toDouble(),
         nextDepth.toDouble(),
         travelTime,
-        currentGas,
+        currentGas!,
       );
       double avgTravelDepth = (currentSimDepth + nextDepth) / 2.0;
       double travelGasUsed =
           travelTime * input.rmv * (1.0 + avgTravelDepth / 10.0);
       gasConsumption[currentGas] = gasConsumption[currentGas]! + travelGasUsed;
 
-      if (stopTimeAtCurrentDepth == 0) {
-        // 정지 없이 바로 통과한 경우 (Ascent 프로필 기록)
+      if (phaseTime == 0) {
         profile.add(
           DiveStep(
             "Ascent",
@@ -269,12 +323,11 @@ class DivePlanner {
           ),
         );
       }
-
       totalTime += travelTime.ceil();
       currentSimDepth = nextDepth;
     }
 
-    // 6. 탱크 잔압 계산 및 가스 부족 경고
+    // 6. 탱크 잔압 검사
     Map<Cylinder, int> remainingPressure = {};
     for (var cylinder in input.cylinders) {
       double usedLiters = gasConsumption[cylinder] ?? 0.0;
@@ -282,11 +335,15 @@ class DivePlanner {
       int remainBar = (cylinder.startPressure - usedBar).toInt();
       remainingPressure[cylinder] = remainBar;
 
-      if (remainBar < 50) {
+      if (remainBar < 0) {
         warnings.add(
-          "WARNING: ${cylinder.name} 탱크의 잔압이 위험 수준입니다 (${remainBar} bar). 더 큰 용량이나 추가 탱크가 필요합니다.",
+          "CRITICAL: ${cylinder.name} 탱크의 가스가 완전히 고갈되었습니다 ($remainBar bar).",
         );
         isFeasible = false;
+      } else if (remainBar < switchPressureBar) {
+        warnings.add(
+          "WARNING: ${cylinder.name} 탱크 잔압이 부족합니다 ($remainBar bar).",
+        );
       }
     }
 
@@ -300,35 +357,78 @@ class DivePlanner {
     );
   }
 
-  // --- 헬퍼 함수들 ---
+  // =======================================================
+  // [핵심 변경] 잔압 기반 최적 가스 선택 헬퍼 함수들
+  // =======================================================
 
-  Cylinder? _getBestBottomGas(List<Cylinder> cylinders, double depth) {
-    // Bottom 목적 가스 중 MOD가 현재 수심보다 깊고 산소 비율이 가장 높은 것
-    var bottomGases = cylinders
-        .where((c) => c.purpose == GasPurpose.bottom)
-        .toList();
-    if (bottomGases.isEmpty) return null;
-    bottomGases.sort((a, b) => b.fractionO2.compareTo(a.fractionO2));
-    return bottomGases.first;
+  double _getRemainBar(Cylinder c, Map<Cylinder, double> consumption) {
+    double usedLiters = consumption[c] ?? 0.0;
+    return c.startPressure - (usedLiters / (c.volume * c.count));
   }
 
-  Cylinder? _getBestDecoGas(List<Cylinder> cylinders, int currentDepth) {
-    // 수심에 맞는 가스 중 산소 비율이 가장 높은 가스 (O2 100% 우선 등)
-    Cylinder? bestGas;
-    double maxO2 = 0.0;
+  Cylinder? _getBestBottomGas(
+    List<Cylinder> cylinders,
+    double depth,
+    Map<Cylinder, double> consumption,
+  ) {
+    var valid = cylinders.where((c) {
+      if (c.purpose != GasPurpose.bottom) return false;
+      // 잔압이 교체 임계점(50bar) 이하인 탱크는 우선 제외 (단, 쓸 수 있는 게 아예 없다면 마지막 탱크를 마이너스까지 써야 함)
+      if (_getRemainBar(c, consumption) <= switchPressureBar) return false;
+      return true;
+    }).toList();
 
-    for (var cylinder in cylinders) {
-      // 현재 수심이 해당 기체의 Deco MOD보다 얕거나 같아야 함
-      if (currentDepth <= cylinder.decoMod) {
-        if (cylinder.fractionO2 > maxO2) {
-          maxO2 = cylinder.fractionO2;
-          bestGas = cylinder;
-        }
-      }
+    // 만약 50bar 이상 남은 탱크가 없다면, 고갈되어도 쥐어짜서 써야 하므로 필터 조건 완화
+    if (valid.isEmpty) {
+      valid = cylinders.where((c) => c.purpose == GasPurpose.bottom).toList();
     }
-    return bestGas;
+    if (valid.isEmpty) return null;
+
+    valid.sort((a, b) {
+      // 1순위: O2 비율이 높은 기체 (기체 성분)
+      int o2Cmp = b.fractionO2.compareTo(a.fractionO2);
+      if (o2Cmp != 0) return o2Cmp;
+      // 2순위: 똑같은 기체라면 잔압(Remaining Bar)이 가장 많은 탱크 우선
+      return _getRemainBar(
+        b,
+        consumption,
+      ).compareTo(_getRemainBar(a, consumption));
+    });
+    return valid.first;
   }
 
+  Cylinder? _getBestDecoGas(
+    List<Cylinder> cylinders,
+    double currentDepth,
+    Map<Cylinder, double> consumption,
+  ) {
+    var valid = cylinders.where((c) {
+      if (c.decoMod < currentDepth) return false; // 수심 초과 가스는 사망 위험으로 절대 제외
+      if (_getRemainBar(c, consumption) <= switchPressureBar)
+        return false; // 임계점 이하 제외
+      return true;
+    }).toList();
+
+    // 사용 가능한 가스가 없다면 (고갈 상태) 마이너스까지 쥐어짜야 하므로 다시 탐색
+    if (valid.isEmpty) {
+      valid = cylinders.where((c) => c.decoMod >= currentDepth).toList();
+    }
+    if (valid.isEmpty) return null;
+
+    valid.sort((a, b) {
+      // 1순위: 감압에 유리한 가장 높은 O2 비율
+      int o2Cmp = b.fractionO2.compareTo(a.fractionO2);
+      if (o2Cmp != 0) return o2Cmp;
+      // 2순위: 동일한 기체라면 잔압이 많은 탱크 우선
+      return _getRemainBar(
+        b,
+        consumption,
+      ).compareTo(_getRemainBar(a, consumption));
+    });
+    return valid.first;
+  }
+
+  // --- 기존 연산 함수들 유지 ---
   void _simulateGasExchange(
     List<double> n2,
     List<double> he,
@@ -338,7 +438,6 @@ class DivePlanner {
     Cylinder gas,
   ) {
     double fN2 = 1.0 - gas.fractionO2 - gas.fractionHe;
-    // Buhlmann 공식 직접 연산 (Schreiner Equation)
     double pAmbStart = 1.0 + (depth1 / 10.0);
     double pAmbEnd = 1.0 + (depth2 / 10.0);
     double pGasStartN2 = (pAmbStart - WATER_VAPOR_PRESSURE) * fN2;

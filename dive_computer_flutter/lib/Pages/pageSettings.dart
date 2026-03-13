@@ -204,38 +204,28 @@ class _PageSettingsState extends State<PageSettings> {
     // 1. 다이버가 장착한 실린더(탱크) 세팅
     List<Cylinder> myTanks = [
       Cylinder(
-        name: "Air",
+        name: "Air1(좌)",
         volume: 11.1,
-        count: 2,
+        count: 1,
         startPressure: 200,
         fractionO2: 0.21,
-        fractionHe: 0.50,
         purpose: GasPurpose.bottom,
       ),
-
+      Cylinder(
+        name: "Air2(우)",
+        volume: 11.1,
+        count: 1,
+        startPressure: 200,
+        fractionO2: 0.21,
+        purpose: GasPurpose.bottom,
+      ),
       // Cylinder(
-      //   name: "EAN34",
+      //   name: "Air3(백업)",
       //   volume: 11.1,
       //   count: 1,
       //   startPressure: 200,
-      //   fractionO2: 0.34,
-      //   purpose: GasPurpose.deco,
-      // ),
-      // Cylinder(
-      //   name: "EAN50",
-      //   volume: 11.1,
-      //   count: 1,
-      //   startPressure: 200,
-      //   fractionO2: 0.50,
-      //   purpose: GasPurpose.deco,
-      // ),
-      // Cylinder(
-      //   name: "O2",
-      //   volume: 5.7,
-      //   count: 1,
-      //   startPressure: 200,
-      //   fractionO2: 1.0,
-      //   purpose: GasPurpose.deco,
+      //   fractionO2: 0.21,
+      //   purpose: GasPurpose.bottom,
       // ),
     ];
 
