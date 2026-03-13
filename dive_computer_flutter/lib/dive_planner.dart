@@ -161,7 +161,7 @@ class DivePlanner {
 
         if (nextGas != null && nextGas != currentGas) {
           // 스위칭 전까지의 기록 저장
-          if (phaseTime > 0)
+          if (phaseTime > 0) {
             profile.add(
               DiveStep(
                 "Bottom",
@@ -171,6 +171,7 @@ class DivePlanner {
                 phaseGasUsed,
               ),
             );
+          }
           phaseTime = 0;
           phaseGasUsed = 0.0;
           currentGas = nextGas; // 기체 교체
@@ -200,7 +201,7 @@ class DivePlanner {
       phaseTime++;
       phaseGasUsed += minGas;
     }
-    if (phaseTime > 0)
+    if (phaseTime > 0) {
       profile.add(
         DiveStep(
           "Bottom",
@@ -210,6 +211,7 @@ class DivePlanner {
           phaseGasUsed,
         ),
       );
+    }
 
     // 5. 상승 및 감압 (Ascent & Deco)
     int currentSimDepth = input.targetDepth.toInt();
@@ -238,8 +240,9 @@ class DivePlanner {
 
       // 현재 수심에서 감압 대기 (1분 단위 루프)
       while (true) {
-        if (_isSafe(nextDepth.toDouble(), simN2, simHe, targetGf))
+        if (_isSafe(nextDepth.toDouble(), simN2, simHe, targetGf)) {
           break; // 상승 가능
+        }
 
         // 감압 중에도 최적의 가스(또는 잔압이 있는 동일 가스)가 있는지 매 분마다 확인
         Cylinder? bestDecoGas = _getBestDecoGas(
@@ -404,8 +407,9 @@ class DivePlanner {
   ) {
     var valid = cylinders.where((c) {
       if (c.decoMod < currentDepth) return false; // 수심 초과 가스는 사망 위험으로 절대 제외
-      if (_getRemainBar(c, consumption) <= switchPressureBar)
+      if (_getRemainBar(c, consumption) <= switchPressureBar) {
         return false; // 임계점 이하 제외
+      }
       return true;
     }).toList();
 
