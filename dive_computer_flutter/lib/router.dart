@@ -1,4 +1,5 @@
 import 'package:dive_computer_flutter/Pages/pageHome.dart';
+import 'package:dive_computer_flutter/Pages/pagePlanner.dart';
 import 'package:dive_computer_flutter/Pages/pageSettings.dart';
 import 'package:dive_computer_flutter/Pages/pageSplash.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:go_router/go_router.dart';
 enum RoutePage {
   splash('/'),
   home('/home'),
+  planner('/planner'),
   settings('/settings');
 
   const RoutePage(this.path);
@@ -29,6 +31,11 @@ final GoRouter router = GoRouter(
       name: RoutePage.home.name,
       path: RoutePage.home.path,
       pageBuilder: (context, state) => NoTransitionPage(child: PageHome()),
+    ),
+    GoRoute(
+      name: RoutePage.planner.name,
+      path: RoutePage.planner.path,
+      pageBuilder: (context, state) => NoTransitionPage(child: PagePlanner()),
     ),
     GoRoute(
       name: RoutePage.settings.name,

@@ -5,8 +5,11 @@ enum AprefKey {
   LAST_N2_LOADING_LIST([]),
   LAST_HE_LOADING_LIST([]),
   ALWAYS_ON_TOP(false),
-  CYLINDER(11.0),
-  RMV(20.0);
+  AscentSpeed(10),
+  DescentSpeed(18),
+  GF_HIGH(0.85),
+  GF_LOW(0.4),
+  PPO2(1.4);
 
   final dynamic defValue;
   const AprefKey(this.defValue);

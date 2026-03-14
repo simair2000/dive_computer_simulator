@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:after_layout/after_layout.dart';
-import 'package:dive_computer_flutter/aPref.dart';
 import 'package:dive_computer_flutter/define.dart';
 import 'package:dive_computer_flutter/extensions.dart';
 import 'package:dive_computer_flutter/router.dart';
@@ -9,7 +8,6 @@ import 'package:dive_computer_flutter/styles.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:go_router/go_router.dart';
-import 'package:window_manager/window_manager.dart';
 
 class PageSplash extends StatefulWidget {
   const PageSplash({super.key});
@@ -35,7 +33,7 @@ class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
             ),
             const SizedBox(height: 20),
             const Text(
-              'Dive Computer Simulator',
+              'HOON\'s Dive',
               style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
             ).color(colorMain).marginOnly(bottom: 10),
             Text(
@@ -45,12 +43,40 @@ class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
               'Made by SangHoon Kim, PADI SCUBA Instructor #537076',
             ).color(colorMain).marginOnly(bottom: 30),
             _showGoButton
-                ? Button(
-                    height: 50,
-                    child: Text('Let\'s DIVE').color(Colors.white),
-                    onPressed: () {
-                      context.goNamed(RoutePage.home.name);
-                    },
+                ? Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Button(
+                        height: 50,
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.scuba_diving,
+                              color: Colors.white,
+                            ).marginOnly(right: 5),
+                            Text('DIVE Simulator').color(Colors.white),
+                          ],
+                        ),
+                        onPressed: () {
+                          context.goNamed(RoutePage.home.name);
+                        },
+                      ).marginOnly(right: 10),
+                      Button(
+                        height: 50,
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.assignment,
+                              color: Colors.white,
+                            ).marginOnly(right: 5),
+                            Text('DIVE Planner').color(Colors.white),
+                          ],
+                        ),
+                        onPressed: () {
+                          context.goNamed(RoutePage.planner.name);
+                        },
+                      ),
+                    ],
                   )
                 : CircularProgressIndicator(color: colorMain),
           ],

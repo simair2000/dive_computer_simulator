@@ -1,5 +1,7 @@
+import 'package:dive_computer_flutter/define.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:get/get_utils/src/extensions/widget_extensions.dart';
 
 Widget Button({
   VoidCallback? onPressed,
@@ -271,4 +273,8 @@ class ConsoleProvider with ChangeNotifier {
       print(e);
     }
   }
+}
+
+Widget horizontalLine() {
+  return Container(height: 1, color: colorMain).marginOnly(bottom: 10, top: 10);
 }

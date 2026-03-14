@@ -146,14 +146,13 @@ class Buhlmann {
   var currentDepth = ValueNotifier<double>(0.0);
   double prevDepth = 0.0;
 
-  double gfHigh = 0.8;
-  double gfLow = 0.2;
-  var gfHighNotifier = ValueNotifier<double>(85);
-  var gfLowNotifier = ValueNotifier<double>(40);
+  double get gfHigh => APref.getData(AprefKey.GF_HIGH);
+  double get gfLow => APref.getData(AprefKey.GF_LOW);
+  // var gfHighNotifier = ValueNotifier<double>(85);
+  // var gfLowNotifier = ValueNotifier<double>(40);
 
-  var ppo2 = ValueNotifier<double>(1.4);
-  double get mod => (((ppo2.value / fractionO2) * 10) - 10);
-  var modNotifier = ValueNotifier<double>(0);
+  var ppo2 = APref.getData(AprefKey.PPO2);
+  double get mod => (((ppo2 / fractionO2) * 10) - 10);
 
   var ndl = ValueNotifier<double>(0.0);
   var tts = ValueNotifier<int>(0);

@@ -1,0 +1,598 @@
+import 'dart:math';
+
+import 'package:dive_computer_flutter/aPref.dart';
+import 'package:dive_computer_flutter/define.dart';
+import 'package:dive_computer_flutter/dive_planner.dart';
+import 'package:dive_computer_flutter/extensions.dart';
+import 'package:dive_computer_flutter/router.dart';
+import 'package:dive_computer_flutter/styles.dart';
+import 'package:dive_computer_flutter/utils.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:get/get.dart';
+import 'package:go_router/go_router.dart';
+
+// ==========================================
+// 1. UI 파트 (PagePlanner)
+// ==========================================
+class PagePlanner extends StatefulWidget {
+  const PagePlanner({super.key});
+
+  @override
+  State<PagePlanner> createState() => _PagePlannerState();
+}
+
+class _PagePlannerState extends State<PagePlanner> {
+  final ScrollController _horizontalScrollController = ScrollController();
+
+  final TextEditingController _textControllerTargetDepth =
+      TextEditingController();
+  final TextEditingController _textControllerBottomTime =
+      TextEditingController();
+  final TextEditingController _textControllerRMV = TextEditingController(
+    text: '20',
+  );
+
+  final TextEditingController _textControllerCylinderName =
+      TextEditingController(text: 'Air');
+
+  final TextEditingController _textControllerCylinderVolume =
+      TextEditingController(text: '11');
+
+  int _cylinderType = 1;
+
+  final TextEditingController _textControllerCylinderStartPressure =
+      TextEditingController(text: '200');
+
+  final TextEditingController _textControllerCylinderO2 = TextEditingController(
+    text: '21',
+  );
+
+  final TextEditingController _textControllerCylinderHe = TextEditingController(
+    text: '0',
+  );
+
+  final List<Cylinder> cylinders = [];
+
+  DivePlanResult? _planResult;
+
+  @override
+  void dispose() {
+    _horizontalScrollController.dispose();
+    _textControllerCylinderHe.dispose();
+    _textControllerCylinderO2.dispose();
+    _textControllerCylinderStartPressure.dispose();
+    _textControllerCylinderVolume.dispose();
+    _textControllerCylinderName.dispose();
+    _textControllerRMV.dispose();
+    _textControllerBottomTime.dispose();
+    _textControllerTargetDepth.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Diving Planner').color(Colors.white),
+        leading: Icon(Icons.assignment, color: Colors.white, size: 30),
+        backgroundColor: colorMain,
+        actions: [
+          IconButton(
+            tooltip: 'Go to the diving simulator',
+            onPressed: () {
+              context.goNamed(RoutePage.home.name);
+            },
+            icon: Icon(Icons.scuba_diving, color: Colors.white),
+          ),
+          IconButton(
+            tooltip: 'Go to the settings',
+            onPressed: () {
+              context.pushNamed(RoutePage.settings.name);
+            },
+            icon: Icon(Icons.settings, color: Colors.white),
+          ),
+          IconButton(
+            tooltip: 'About',
+            onPressed: () {
+              showGetDialog(
+                'About Dive Planner',
+                'This Dive Planner is an advanced decompression scheduling tool designed for both recreational and technical divers...\n\n(생략)',
+              );
+            },
+            icon: Icon(Icons.help, color: Colors.white),
+          ),
+        ],
+      ),
+      body: Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Container(
+              color: colorMain.withAlpha(30),
+              padding: EdgeInsets.all(20),
+              child: ListView(
+                children: [
+                  // --- Target Depth, Bottom Time, RMV 입력부 ---
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Target Depth (m)',
+                        ).weight(FontWeight.bold).color(colorMain),
+                      ),
+                      Expanded(
+                        child: InputText(
+                          width: 100,
+                          controller: _textControllerTargetDepth,
+                          textAlign: TextAlign.center,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'^\d*\.?\d*$'),
+                            ),
+                          ],
+                          maxLines: 1,
+                          onFieldSubmitted: (value) {},
+                        ),
+                      ),
+                    ],
+                  ).marginOnly(bottom: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Bottom time (min)',
+                            ).weight(FontWeight.bold).color(colorMain),
+                            Text('(Include Descent time)').color(colorMain),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: InputText(
+                          width: 100,
+                          controller: _textControllerBottomTime,
+                          textAlign: TextAlign.center,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'^\d{0,3}$'),
+                            ),
+                          ],
+                          maxLines: 1,
+                          onFieldSubmitted: (value) {},
+                        ),
+                      ),
+                    ],
+                  ).marginOnly(bottom: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'RMV',
+                            ).weight(FontWeight.bold).color(colorMain),
+                            Text(
+                              '(Respiratory Minute Volume)',
+                            ).color(colorMain),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: InputText(
+                          width: 100,
+                          controller: _textControllerRMV,
+                          textAlign: TextAlign.center,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'^\d*\.?\d*$'),
+                            ),
+                          ],
+                          maxLines: 1,
+                          onFieldSubmitted: (value) {},
+                        ),
+                      ),
+                    ],
+                  ),
+                  horizontalLine(),
+                  Text('Cylinder')
+                      .weight(FontWeight.bold)
+                      .color(colorMain)
+                      .marginOnly(bottom: 10),
+
+                  // --- Cylinder 세부 입력부 ---
+                  Row(
+                    children: [
+                      Expanded(child: Text('Type').color(colorMain)),
+                      Expanded(
+                        child: Button(
+                          height: 46,
+                          child: Text(
+                            _cylinderType == 1 ? 'Single' : 'Double',
+                          ).color(Colors.white),
+                          onPressed: () {
+                            setState(() {
+                              _cylinderType = _cylinderType == 1 ? 2 : 1;
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ).marginOnly(bottom: 5),
+                  Row(
+                    children: [
+                      Expanded(child: Text('Name').color(colorMain)),
+                      Expanded(
+                        child: InputText(
+                          controller: _textControllerCylinderName,
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          onFieldSubmitted: (value) {},
+                        ),
+                      ),
+                    ],
+                  ).marginOnly(bottom: 5),
+                  Row(
+                    children: [
+                      Expanded(child: Text('Volume (Liter)').color(colorMain)),
+                      Expanded(
+                        child: InputText(
+                          controller: _textControllerCylinderVolume,
+                          textAlign: TextAlign.center,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'^\d*\.?\d*$'),
+                            ),
+                          ],
+                          maxLines: 1,
+                          onFieldSubmitted: (value) {},
+                        ),
+                      ),
+                    ],
+                  ).marginOnly(bottom: 5),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text('Start Pressure (bar)').color(colorMain),
+                      ),
+                      Expanded(
+                        child: InputText(
+                          controller: _textControllerCylinderStartPressure,
+                          textAlign: TextAlign.center,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'^\d*\.?\d*$'),
+                            ),
+                          ],
+                          maxLines: 1,
+                          onFieldSubmitted: (value) {},
+                        ),
+                      ),
+                    ],
+                  ).marginOnly(bottom: 5),
+                  Row(
+                    children: [
+                      Expanded(child: Text('O2 %').color(colorMain)),
+                      Expanded(
+                        flex: 2,
+                        child: InputText(
+                          controller: _textControllerCylinderO2,
+                          textAlign: TextAlign.center,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'^\d{0,3}$'),
+                            ),
+                          ],
+                          maxLines: 1,
+                        ).marginOnly(right: 20),
+                      ),
+                      Expanded(child: Text('He %').color(colorMain)),
+                      Expanded(
+                        flex: 2,
+                        child: InputText(
+                          controller: _textControllerCylinderHe,
+                          textAlign: TextAlign.center,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'^\d{0,2}$'),
+                            ),
+                          ],
+                          maxLines: 1,
+                        ),
+                      ),
+                    ],
+                  ).marginOnly(bottom: 10),
+                  Align(
+                    alignment: AlignmentGeometry.centerRight,
+                    child: IconButton(
+                      tooltip: 'Add Cylinder',
+                      onPressed: () {
+                        _addCylinder();
+                      },
+                      icon: Icon(Icons.add_circle, color: colorMain, size: 40),
+                    ),
+                  ),
+                  horizontalLine(),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 3,
+            child: Container(
+              padding: EdgeInsets.all(20),
+              child: ListView(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
+                    children: [
+                      Text('Cylinder List')
+                          .weight(FontWeight.bold)
+                          .color(colorMain)
+                          .marginOnly(bottom: 10)
+                          .marginOnly(right: 20),
+                      Button(
+                        height: 50,
+                        color: Colors.green,
+                        child: Text('Plan').color(Colors.white),
+                        onPressed: () {
+                          _startDivePlan();
+                        },
+                      ),
+                    ],
+                  ),
+                  _cylinderList(),
+                  horizontalLine(),
+                  _divePlanResult(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _addCylinder() {
+    if (textIsEmpty(_textControllerCylinderName.text)) {
+      showSnackbar('Error', 'Please enter cylinder name');
+      return;
+    }
+    if (textIsEmpty(_textControllerCylinderVolume.text)) {
+      showSnackbar('Error', 'Please enter cylinder volume');
+      return;
+    }
+    if (textIsEmpty(_textControllerCylinderStartPressure.text)) {
+      showSnackbar('Error', 'Please enter cylinder start pressure');
+      return;
+    }
+    if (textIsEmpty(_textControllerCylinderO2.text)) {
+      showSnackbar('Error', 'Please enter the fraction of Oxygen');
+      return;
+    }
+    if (textIsEmpty(_textControllerCylinderHe.text)) {
+      showSnackbar('Error', 'Please enter the fraction of helium');
+      return;
+    }
+
+    // [수정점] 기체 성분 논리적 무결성 체크
+    double o2Value = double.parse(_textControllerCylinderO2.text);
+    double heValue = double.parse(_textControllerCylinderHe.text);
+
+    if (o2Value <= 0 || o2Value > 100) {
+      showSnackbar('Error', 'Oxygen percentage must be between 1 and 100');
+      return;
+    }
+    if (heValue < 0 || heValue >= 100) {
+      showSnackbar('Error', 'Helium percentage must be between 0 and 99');
+      return;
+    }
+    if (o2Value + heValue > 100) {
+      showSnackbar('Error', 'O2 and He total cannot exceed 100%');
+      return;
+    }
+
+    Cylinder cylinder = Cylinder(
+      count: _cylinderType,
+      name: _textControllerCylinderName.text,
+      volume: double.parse(_textControllerCylinderVolume.text),
+      startPressure: double.parse(_textControllerCylinderStartPressure.text),
+      fractionO2: o2Value / 100.0,
+      fractionHe: heValue / 100.0,
+    );
+    setState(() {
+      cylinders.add(cylinder);
+    });
+  }
+
+  Widget _cylinderList() {
+    return SizedBox(
+      height: 190,
+      child: Scrollbar(
+        controller: _horizontalScrollController,
+        thumbVisibility: true,
+        thickness: 8.0,
+        radius: const Radius.circular(10),
+        child: ListView.builder(
+          shrinkWrap: true,
+          controller: _horizontalScrollController,
+          scrollDirection: Axis.horizontal,
+          itemCount: cylinders.length,
+          itemBuilder: (context, index) {
+            Cylinder cylinder = cylinders[index];
+            double consumption = _planResult?.gasConsumption[cylinder] ?? 0;
+            double remain = cylinder.totalLiters - consumption;
+            double fillRatio = cylinder.totalLiters > 0
+                ? (remain / cylinder.totalLiters).clamp(0.0, 1.0)
+                : 0.0;
+            return Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: colorMain, width: 1),
+                borderRadius: BorderRadius.all(Radius.circular(8)),
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: [
+                    Colors.blueAccent.withAlpha(100),
+                    Colors.transparent,
+                  ],
+                  stops: [fillRatio, fillRatio],
+                ),
+              ),
+              padding: const EdgeInsets.only(bottom: 10, left: 10),
+              child: Stack(
+                alignment: AlignmentGeometry.topRight,
+                children: [
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      cylinder.count == 1
+                          ? Image.asset(
+                              'assets/single-tank.png',
+                              color: colorMain,
+                              scale: 6,
+                            )
+                          : Image.asset(
+                              'assets/double-tank.png',
+                              color: colorMain,
+                              scale: 6,
+                            ),
+                      Text(
+                            '${cylinder.name}\nVolume : ${cylinder.totalLiters} L\nRemain : ${remain.toStringAsFixed(1)} L',
+                          )
+                          .color(colorMain)
+                          .align(TextAlign.center)
+                          .marginOnly(top: 10),
+                    ],
+                  ).marginOnly(right: 30),
+                  IconButton(
+                    onPressed: () {
+                      setState(() {
+                        cylinders.removeAt(index);
+                      });
+                    },
+                    icon: Icon(
+                      Icons.disabled_by_default_rounded,
+                      color: Colors.red,
+                      size: 30,
+                    ),
+                  ),
+                ],
+              ),
+            ).marginOnly(right: 10);
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _divePlanResult() {
+    return _planResult == null
+        ? Container()
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                    _planResult!.isFeasible
+                        ? 'Total dive time : ${_planResult!.totalDiveTime}min'
+                        : '🚨 This dive is impossible or very dangerous with the current gas/set!',
+                  )
+                  .color(colorMain)
+                  .weight(FontWeight.bold)
+                  .size(17)
+                  .marginOnly(bottom: 20),
+              Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: colorMain.withAlpha(200)),
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                ),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(), // Scroll 충돌 방지
+                  itemCount: _planResult!.isFeasible
+                      ? _planResult!.profile.length
+                      : _planResult!.warnings.length,
+                  separatorBuilder: (context, index) {
+                    return Container(color: colorMain.withAlpha(60), height: 1);
+                  },
+                  itemBuilder: (context, index) {
+                    return Container(
+                      padding: EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 10,
+                      ),
+                      color: index.isOdd
+                          ? colorMain.withAlpha(20)
+                          : Colors.transparent,
+                      child: _planResult!.isFeasible
+                          ? _profileView(_planResult!.profile[index])
+                          : _warningView(_planResult!.warnings[index]),
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+  }
+
+  void _startDivePlan() {
+    if (textIsEmpty(_textControllerTargetDepth.text)) {
+      showSnackbar('Error', 'Please enter target depth');
+      return;
+    }
+    if (textIsEmpty(_textControllerBottomTime.text)) {
+      showSnackbar('Error', 'Please enter bottom time');
+      return;
+    }
+    if (textIsEmpty(_textControllerRMV.text)) {
+      showSnackbar('Error', 'Please enter RMV');
+      return;
+    }
+    if (cylinders.isEmpty) {
+      showSnackbar('Error', 'Please add a cylinder');
+      return;
+    }
+
+    DivePlanInput input = DivePlanInput(
+      targetDepth: double.parse(_textControllerTargetDepth.text),
+      bottomTime: int.parse(_textControllerBottomTime.text),
+      rmv: double.parse(_textControllerRMV.text),
+      cylinders: cylinders,
+    );
+
+    // APref 값 가져올 때 발생할 수 있는 오류 방어 처리
+    double gfHighVal = 0.85;
+    double gfLowVal = 0.30;
+    try {
+      gfHighVal = APref.getData(AprefKey.GF_HIGH) ?? 0.85;
+      gfLowVal = APref.getData(AprefKey.GF_LOW) ?? 0.30;
+    } catch (_) {}
+
+    DivePlanner planner = DivePlanner(gfHigh: gfHighVal, gfLow: gfLowVal);
+    _planResult = planner.generatePlan(input);
+
+    setState(() {});
+  }
+
+  Widget _profileView(DiveStep profile) {
+    String msg = '';
+    if (profile.phase == "Gas Switch") {
+      msg =
+          '>> Reached ${profile.depth}m: Gas switch to [${profile.gasUsed.name}] cylinder! <<';
+    } else {
+      // [수정점] msg = msg = 이중할당 오타 수정
+      msg =
+          "${profile.phase} - Depth ${profile.depth}m / ${profile.time} min (Gas: ${profile.gasUsed.name})";
+    }
+    return Text(msg).color(colorMain);
+  }
+
+  Widget _warningView(String warning) {
+    return Text('⚠️ $warning').color(colorMain);
+  }
+}

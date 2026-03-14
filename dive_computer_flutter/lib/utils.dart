@@ -54,6 +54,7 @@ void showSnackbar(String title, String message) {
     message,
     backgroundColor: Colors.black.withAlpha(150),
     colorText: Colors.white,
+    margin: EdgeInsets.symmetric(horizontal: 150, vertical: 20),
     snackPosition: SnackPosition.BOTTOM,
   );
 }

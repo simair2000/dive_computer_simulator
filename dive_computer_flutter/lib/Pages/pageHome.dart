@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:after_layout/after_layout.dart';
+import 'package:dive_computer_flutter/aPref.dart';
 import 'package:dive_computer_flutter/buhlmann.dart';
 import 'package:dive_computer_flutter/define.dart';
 import 'package:dive_computer_flutter/extensions.dart';
@@ -56,20 +57,29 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('HOON\'s Dive Computer Simulator').color(Colors.white),
+        title: Text('Diving Simulator').color(Colors.white),
         leading: Icon(Icons.scuba_diving, color: Colors.white, size: 30),
         backgroundColor: colorMain,
         actions: [
           IconButton(
+            tooltip: 'Go to the diving planner',
+            onPressed: () {
+              context.goNamed(RoutePage.planner.name);
+            },
+            icon: Icon(Icons.assignment, color: Colors.white),
+          ),
+          IconButton(
+            tooltip: 'Go to the settings',
             onPressed: () {
               context.pushNamed(RoutePage.settings.name);
             },
             icon: Icon(Icons.settings, color: Colors.white),
           ),
           IconButton(
+            tooltip: 'About',
             onPressed: () {
               showGetDialog(
-                'About',
+                'About Dive Simulator',
                 '- This is a dive computer simulator based on the ZHL-16C algorithm.\n- Supports Trimix (He) diving.\n- The NDL and TTS will be calculated in real-time.\n- Please use this simulator responsibly.',
               );
             },
@@ -89,9 +99,6 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
           _buhlmann.decoStopTime,
           _buhlmann.needDeco,
           _buhlmann.currentPO2,
-          _buhlmann.gfHighNotifier,
-          _buhlmann.gfLowNotifier,
-          _buhlmann.ppo2,
           _buhlmann.updateTick,
           _buhlmann.surfaceTime,
           _buhlmann.diveCount,
@@ -178,7 +185,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                           : Text(
                               'Surface Interval : ${_buhlmann.surfaceTime.value.hhmmss()}',
                             ).color(colorMain).weight(FontWeight.bold),
-                      _horizontalLine(),
+                      horizontalLine(),
                       SizedBox(
                         width: double.infinity,
                         child: Text('Depth')
@@ -252,26 +259,14 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                           ),
                         ],
                       ).marginOnly(bottom: 10),
-                      _horizontalLine(),
+                      horizontalLine(),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.start,
                         children: [
-                          SizedBox(
-                            width: 50,
-                            child: Text(
-                              'PPO2',
-                            ).color(colorMain).weight(FontWeight.bold),
-                          ).marginOnly(right: 20),
-                          Button(
-                            child: Text(
-                              '${_buhlmann.ppo2.value}',
-                            ).color(Colors.white),
-                            onPressed: () {
-                              _buhlmann.ppo2.value = _buhlmann.ppo2.value == 1.4
-                                  ? 1.6
-                                  : 1.4;
-                            },
-                          ).marginOnly(right: 40),
+                          Text('PPO2 : ${APref.getData(AprefKey.PPO2)}')
+                              .color(colorMain)
+                              .weight(FontWeight.bold)
+                              .marginOnly(right: 20),
                           Text(
                             'MOD : ${_buhlmann.mod.floor().toStringAsFixed(1)}m',
                           ).color(colorMain).weight(FontWeight.bold),
@@ -294,7 +289,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                             textAlign: TextAlign.center,
                             inputFormatters: [
                               FilteringTextInputFormatter.allow(
-                                RegExp(r'^\d{0,2}$'),
+                                RegExp(r'^\d{0,3}$'),
                               ),
                             ],
                             maxLines: 1,
@@ -350,105 +345,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                         ],
                       ).marginOnly(bottom: 10),
 
-                      _horizontalLine(),
-                      Row(
-                        children: [
-                          Text(
-                            'GF High',
-                          ).color(colorMain).weight(FontWeight.bold),
-                          Slider(
-                            activeColor: colorMain,
-                            value: _buhlmann.gfHighNotifier.value,
-                            onChanged: (value) {
-                              if (value <= _buhlmann.gfLowNotifier.value) {
-                                if (value < 11) value = 11;
-                                _buhlmann.gfLowNotifier.value = value - 1;
-                                _buhlmann.gfLow = (value - 1) / 100.0;
-                              }
-                              _buhlmann.gfHighNotifier.value = value;
-                              _buhlmann.gfHigh = value / 100.0;
-                            },
-                            min: 10,
-                            max: 95,
-                          ),
-                          Text(
-                            '${_buhlmann.gfHighNotifier.value.toInt()}%',
-                          ).color(colorMain).weight(FontWeight.bold),
-                        ],
-                      ),
-                      Row(
-                        children: [
-                          SizedBox(
-                            width: 55,
-                            child: Text(
-                              'GF Low',
-                            ).color(colorMain).weight(FontWeight.bold),
-                          ),
-                          Slider(
-                            activeColor: colorMain,
-                            value: _buhlmann.gfLowNotifier.value,
-                            onChanged: (value) {
-                              if (value >= _buhlmann.gfHighNotifier.value) {
-                                if (value > 94) value = 94;
-                                _buhlmann.gfHighNotifier.value = value + 1;
-                                _buhlmann.gfHigh = (value + 1) / 100.0;
-                              }
-                              _buhlmann.gfLowNotifier.value = value;
-                              _buhlmann.gfLow = value / 100.0;
-                            },
-                            min: 10,
-                            max: 95,
-                          ),
-                          Text(
-                            '${_buhlmann.gfLowNotifier.value.toInt()}%',
-                          ).color(colorMain).weight(FontWeight.bold),
-                        ],
-                      ),
-                      Text('Conservatism Settings')
-                          .color(colorMain)
-                          .weight(FontWeight.bold)
-                          .marginOnly(bottom: 10),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Button(
-                            tooltip:
-                                'Most conservative setting with longest decompression times',
-                            child: Text('SAFE').color(Colors.white),
-                            onPressed: () {
-                              _buhlmann.gfHighNotifier.value = 70;
-                              _buhlmann.gfLowNotifier.value = 30;
-                              _buhlmann.gfHigh = 0.7;
-                              _buhlmann.gfLow = 0.3;
-                            },
-                            color: colorMain,
-                          ),
-                          Button(
-                            child: Text('MODERATE').color(Colors.white),
-                            onPressed: () {
-                              _buhlmann.gfHighNotifier.value = 85;
-                              _buhlmann.gfLowNotifier.value = 40;
-                              _buhlmann.gfHigh = 0.85;
-                              _buhlmann.gfLow = 0.4;
-                            },
-                            color: colorMain,
-                            tooltip:
-                                'Moderate conservatism with a balance between safety and efficiency',
-                          ),
-                          Button(
-                            tooltip:
-                                'Shortest stop time but higher risk of DCS',
-                            child: Text('AGGRESSIVE').color(Colors.white),
-                            onPressed: () {
-                              _buhlmann.gfHighNotifier.value = 95;
-                              _buhlmann.gfLowNotifier.value = 50;
-                              _buhlmann.gfHigh = 0.95;
-                              _buhlmann.gfLow = 0.5;
-                            },
-                            color: colorMain,
-                          ),
-                        ],
-                      ),
+                      horizontalLine(),
                     ],
                   ),
                 ),
@@ -520,30 +417,18 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                           ).color(colorMain),
                         ],
                       ).marginOnly(bottom: 5),
-                      _horizontalLine(),
+                      horizontalLine(),
                       Text('DECO (Decompression) status')
-                          .color(
-                            colorMain.withAlpha(
-                              _buhlmann.needDeco.value ? 255 : 100,
-                            ),
-                          )
+                          .color(colorMain)
                           .weight(FontWeight.bold)
                           .marginOnly(bottom: 10),
-                      Text('Ceiling : ${_buhlmann.decoStopDepth.value}m')
-                          .color(
-                            colorMain.withAlpha(
-                              _buhlmann.needDeco.value ? 255 : 100,
-                            ),
-                          )
-                          .marginOnly(bottom: 5),
-                      Text('Stop Time : ${_buhlmann.decoStopTime.value} min')
-                          .color(
-                            colorMain.withAlpha(
-                              _buhlmann.needDeco.value ? 255 : 100,
-                            ),
-                          )
-                          .marginOnly(bottom: 5),
-                      _horizontalLine(),
+                      Text(
+                        'Ceiling : ${_buhlmann.decoStopDepth.value}m',
+                      ).color(colorMain).marginOnly(bottom: 5),
+                      Text(
+                        'Deep Stop : ${_buhlmann.decoStopTime.value} min',
+                      ).color(colorMain).marginOnly(bottom: 5),
+                      horizontalLine(),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -655,13 +540,15 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
             _buhlmann.currentDepth.value = 0;
             _currentMoveStatus = DiveMoveStatus.onStop; // 수면 도착 시 정지
           } else {
-            _buhlmann.currentDepth.value -= 0.1;
+            _buhlmann.currentDepth.value -=
+                (APref.getData(AprefKey.AscentSpeed) / 60);
           }
           _textControllerDepth.text = _buhlmann.currentDepth.value
               .toStringAsFixed(1);
           break;
         case DiveMoveStatus.onDescending:
-          _buhlmann.currentDepth.value += 0.3;
+          _buhlmann.currentDepth.value +=
+              (APref.getData(AprefKey.DescentSpeed) / 60);
           _textControllerDepth.text = _buhlmann.currentDepth.value
               .toStringAsFixed(1);
           break;
@@ -669,12 +556,5 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
           break;
       }
     });
-  }
-
-  Widget _horizontalLine() {
-    return Container(
-      height: 1,
-      color: colorMain,
-    ).marginOnly(bottom: 10, top: 10);
   }
 }

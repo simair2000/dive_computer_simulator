@@ -6,6 +6,7 @@ import 'package:dive_computer_flutter/styles.dart';
 import 'package:dive_computer_flutter/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:get/get_utils/src/extensions/widget_extensions.dart';
 import 'package:get/get_utils/src/platform/platform.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -22,19 +23,28 @@ class _PageSettingsState extends State<PageSettings> {
 
   var _currentView;
 
-  final TextEditingController _textControllerRMV = TextEditingController();
-  final TextEditingController _textControllerCylinder = TextEditingController();
+  final TextEditingController _textControllerAscent = TextEditingController();
+  final TextEditingController _textControllerDescent = TextEditingController();
+
+  var gfHighNotifier = ValueNotifier<double>(85);
+  var gfLowNotifier = ValueNotifier<double>(40);
+
+  double ppo2 = 1.4;
+  double get mod => (((ppo2 / 0.21) * 10) - 10);
 
   @override
   void initState() {
+    ppo2 = APref.getData(AprefKey.PPO2);
+    gfHighNotifier.value = APref.getData(AprefKey.GF_HIGH) * 100;
+    gfLowNotifier.value = APref.getData(AprefKey.GF_LOW) * 100;
     _currentView = _settingDiving;
     super.initState();
   }
 
   @override
   void dispose() {
-    _textControllerCylinder.dispose();
-    _textControllerRMV.dispose();
+    _textControllerDescent.dispose();
+    _textControllerAscent.dispose();
     super.dispose();
   }
 
@@ -103,11 +113,16 @@ class _PageSettingsState extends State<PageSettings> {
           ),
           Expanded(
             flex: 3,
-            child: Container(
-              padding: EdgeInsets.all(20),
-              child: _currentView == _settingGeneral
-                  ? _viewSettingGeneral()
-                  : _viewSettingDiving(),
+            child: AnimatedBuilder(
+              animation: Listenable.merge([gfHighNotifier, gfLowNotifier]),
+              builder: (context, child) {
+                return Container(
+                  padding: EdgeInsets.all(20),
+                  child: _currentView == _settingGeneral
+                      ? _viewSettingGeneral()
+                      : _viewSettingDiving(),
+                );
+              },
             ),
           ),
         ],
@@ -123,7 +138,7 @@ class _PageSettingsState extends State<PageSettings> {
           child: CheckboxListTile(
             controlAffinity: ListTileControlAffinity.leading,
             activeColor: colorMain,
-            title: Text('Always on top').color(colorMain),
+            title: Text('Window always on top').color(colorMain),
             value: APref.getData(AprefKey.ALWAYS_ON_TOP),
             onChanged: (value) {
               setState(() {
@@ -140,28 +155,28 @@ class _PageSettingsState extends State<PageSettings> {
   }
 
   Widget _viewSettingDiving() {
-    _textControllerRMV.text = '${APref.getData(AprefKey.RMV)}';
-    _textControllerCylinder.text = '${APref.getData(AprefKey.CYLINDER)}';
+    _textControllerAscent.text = '${APref.getData(AprefKey.AscentSpeed)}';
+    _textControllerDescent.text = '${APref.getData(AprefKey.DescentSpeed)}';
     return ListView(
       children: [
         ListTile(
           title: Text(
-            'Cylinder(Tank) volume (Litre)',
+            'Descent Speed (m/min)',
           ).weight(FontWeight.bold).color(colorMain),
 
           trailing: InputText(
             width: 150,
-            controller: _textControllerCylinder,
+            controller: _textControllerDescent,
             textAlign: TextAlign.center,
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
             ],
             maxLines: 1,
             onFieldSubmitted: (value) {
-              if (textIsNotEmpty(_textControllerCylinder.text)) {
+              if (textIsNotEmpty(_textControllerDescent.text)) {
                 APref.setData(
-                  AprefKey.CYLINDER,
-                  double.parse(_textControllerCylinder.text),
+                  AprefKey.DescentSpeed,
+                  double.parse(_textControllerDescent.text),
                 );
               }
               setState(() {});
@@ -169,33 +184,148 @@ class _PageSettingsState extends State<PageSettings> {
           ),
         ),
         ListTile(
-          title: Text('RMV (L/min)').weight(FontWeight.bold).color(colorMain),
-          subtitle: Text('(Respiratory Minute Volume)').color(colorMain),
+          title: Text(
+            'Ascent Speed (m/min)',
+          ).weight(FontWeight.bold).color(colorMain),
           trailing: InputText(
             width: 150,
-            controller: _textControllerRMV,
+            controller: _textControllerAscent,
             textAlign: TextAlign.center,
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
             ],
             maxLines: 1,
             onFieldSubmitted: (value) {
-              if (textIsNotEmpty(_textControllerRMV.text)) {
+              if (textIsNotEmpty(_textControllerAscent.text)) {
                 APref.setData(
-                  AprefKey.RMV,
-                  double.parse(_textControllerRMV.text),
+                  AprefKey.AscentSpeed,
+                  double.parse(_textControllerAscent.text),
                 );
               }
               setState(() {});
             },
           ),
+        ),
+        Divider(),
+        Row(
+          children: [
+            Text('GF High').color(colorMain).weight(FontWeight.bold),
+            Slider(
+              activeColor: colorMain,
+              value: gfHighNotifier.value,
+              onChanged: (value) {
+                if (value <= gfLowNotifier.value) {
+                  if (value < 11) value = 11;
+                  gfLowNotifier.value = value - 1;
+                  APref.setData(AprefKey.GF_LOW, (value - 1) / 100.0);
+                }
+                gfHighNotifier.value = value;
+                APref.setData(AprefKey.GF_HIGH, value / 100.0);
+              },
+              min: 10,
+              max: 95,
+            ),
+            Text(
+              '${gfHighNotifier.value.toInt()}%',
+            ).color(colorMain).weight(FontWeight.bold),
+          ],
+        ),
+        Row(
+          children: [
+            SizedBox(
+              width: 55,
+              child: Text('GF Low').color(colorMain).weight(FontWeight.bold),
+            ),
+            Slider(
+              activeColor: colorMain,
+              value: gfLowNotifier.value,
+              onChanged: (value) {
+                if (value >= gfHighNotifier.value) {
+                  if (value > 94) value = 94;
+                  gfHighNotifier.value = value + 1;
+                  APref.setData(AprefKey.GF_HIGH, (value + 1) / 100.0);
+                }
+                gfLowNotifier.value = value;
+                APref.setData(AprefKey.GF_LOW, value / 100.0);
+              },
+              min: 10,
+              max: 95,
+            ),
+            Text(
+              '${gfLowNotifier.value.toInt()}%',
+            ).color(colorMain).weight(FontWeight.bold),
+          ],
+        ),
+        Text(
+          'Conservatism Settings',
+        ).color(colorMain).weight(FontWeight.bold).marginOnly(bottom: 10),
+        Row(
+          children: [
+            Button(
+              tooltip:
+                  'Most conservative setting with longest decompression times',
+              child: Text('SAFE').color(Colors.white),
+              onPressed: () {
+                gfHighNotifier.value = 70;
+                gfLowNotifier.value = 30;
+                APref.setData(AprefKey.GF_HIGH, 0.7);
+                APref.setData(AprefKey.GF_LOW, 0.3);
+              },
+              color: colorMain,
+            ).marginOnly(right: 10),
+            Button(
+              child: Text('MODERATE').color(Colors.white),
+              onPressed: () {
+                gfHighNotifier.value = 85;
+                gfLowNotifier.value = 40;
+                APref.setData(AprefKey.GF_HIGH, 0.85);
+                APref.setData(AprefKey.GF_LOW, 0.4);
+              },
+              color: colorMain,
+              tooltip:
+                  'Moderate conservatism with a balance between safety and efficiency',
+            ).marginOnly(right: 10),
+            Button(
+              tooltip: 'Shortest stop time but higher risk of DCS',
+              child: Text('AGGRESSIVE').color(Colors.white),
+              onPressed: () {
+                gfHighNotifier.value = 95;
+                gfLowNotifier.value = 50;
+                APref.setData(AprefKey.GF_HIGH, 0.95);
+                APref.setData(AprefKey.GF_LOW, 0.5);
+              },
+              color: colorMain,
+            ),
+          ],
+        ),
+        Divider().marginOnly(top: 10, bottom: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 50,
+              child: Text('PPO2').color(colorMain).weight(FontWeight.bold),
+            ).marginOnly(right: 20),
+            Button(
+              child: Text('$ppo2').color(Colors.white),
+              onPressed: () {
+                setState(() {
+                  ppo2 = ppo2 == 1.4 ? 1.6 : 1.4;
+                  APref.setData(AprefKey.PPO2, ppo2);
+                });
+              },
+            ).marginOnly(right: 40),
+            Text(
+              'MOD : ${mod.floor().toStringAsFixed(1)}m',
+            ).color(colorMain).weight(FontWeight.bold),
+          ],
         ),
         Button(
           child: Text('test').color(Colors.white),
           onPressed: () {
             _testDivePlanner();
           },
-        ),
+        ).marginOnly(top: 20),
       ],
     );
   }
