@@ -689,13 +689,11 @@ class DivePlanner {
 }
 
 class DivePlanner2 {
-  // Shearwater 기본 권장 설정 (Medium: 40/85)
   final double gfLow;
   final double gfHigh;
 
-  // 쉬어워터 표준 상승 속도: 10m/min
-  final double ascentRate = 10.0;
-  final double descentRate = 20.0;
+  // final double ascentRate = 10.0;
+  // final double descentRate = 20.0;
   final double switchPressureBar = 30.0; // 최소 잔압 임계치
 
   DivePlanner2({this.gfLow = 0.40, this.gfHigh = 0.85});
@@ -726,7 +724,8 @@ class DivePlanner2 {
     }
 
     // 3. 하강 (Descent)
-    double descentTime = input.targetDepth / descentRate;
+    double descentTime =
+        input.targetDepth / APref.getData(AprefKey.DescentSpeed);
     _simulateGasExchange(
       simN2,
       simHe,
@@ -792,7 +791,8 @@ class DivePlanner2 {
 
       if (ceiling <= nextStop) {
         // 다음 정지 수심까지 상승 가능
-        double travelTime = (currentDepth - nextStop) / ascentRate;
+        double travelTime =
+            (currentDepth - nextStop) / APref.getData(AprefKey.AscentSpeed);
         _simulateGasExchange(
           simN2,
           simHe,

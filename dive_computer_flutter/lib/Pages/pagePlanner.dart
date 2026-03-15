@@ -97,7 +97,7 @@ class _PagePlannerState extends State<PagePlanner> {
             onPressed: () {
               showGetDialog(
                 'About Dive Planner',
-                'This Dive Planner is an advanced decompression scheduling tool designed for both recreational and technical divers...\n\n(생략)',
+                'This Dive Planner is an advanced decompression scheduling tool designed for both recreational and technical divers...\n\n',
               );
             },
             icon: Icon(Icons.help, color: Colors.white),
@@ -794,7 +794,132 @@ class _PagePlannerState extends State<PagePlanner> {
 
     DivePlanner2 planner = DivePlanner2(gfHigh: gfHighVal, gfLow: gfLowVal);
     _planResult = planner.generatePlan(input);
-
+    showPlanDetailDialog(_planResult!, input);
     setState(() {});
+  }
+
+  void showPlanDetailDialog(DivePlanResult result, DivePlanInput input) {
+    // 1. 가스 소모 내역 문자열 생성
+    String gasSummary = result.gasConsumption.entries
+        .map((e) {
+          int remain = result.remainingPressure[e.key] ?? 0;
+          return "• ${e.key.name}: ${e.value.toInt()}L 소모 (잔압: ${remain} bar)";
+        })
+        .join("\n");
+
+    // 2. 경고 사항 문자열 생성
+    String warnings = result.warnings.isEmpty
+        ? "✅ 안전 주의사항 없음"
+        : "⚠️ 경고:\n${result.warnings.map((w) => "- $w").join("\n")}";
+
+    // 3. 주요 감압 정보 추출
+    int firstStop = result.profile
+        .firstWhere(
+          (s) => s.phase == "Deco Stop",
+          orElse: () => DiveStep("", 0, 0, input.cylinders.first, 0),
+        )
+        .depth;
+
+    double gfHighVal = 0.85;
+    double gfLowVal = 0.30;
+    try {
+      gfHighVal = APref.getData(AprefKey.GF_HIGH) ?? 0.85;
+      gfLowVal = APref.getData(AprefKey.GF_LOW) ?? 0.30;
+    } catch (_) {}
+
+    Get.defaultDialog(
+      contentPadding: EdgeInsets.all(20),
+      title: "Dive Plan Summary",
+      titleStyle: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+      content: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // --- 기본 정보 ---
+          _buildSectionTitle("📊 기본 다이빙 정보"),
+          _buildInfoRow("목표 수심", "${input.targetDepth}m"),
+          _buildInfoRow("바닥 체류", "${input.bottomTime}분"),
+          _buildInfoRow("총 다이빙 시간", "${result.totalDiveTime.toInt()}분"),
+          _buildInfoRow("알고리즘", "Buhlmann ZHL-16C"),
+          _buildInfoRow(
+            "GF 설정",
+            "${(gfLowVal * 100).toInt()}/${(gfHighVal * 100).toInt()}",
+          ),
+
+          Divider(),
+
+          // --- 감압 정보 ---
+          _buildSectionTitle("⚓ 감압/상승 정보"),
+          _buildInfoRow(
+            "첫 정지 수심",
+            firstStop > 0 ? "${firstStop}m" : "무감압(NDL)",
+          ),
+          _buildInfoRow("최종 정지 수심", "3m"),
+          _buildInfoRow("상승 속도", "10m/min"),
+
+          Divider(),
+
+          // --- 가스 정보 ---
+          _buildSectionTitle("⛽ 가스 소모 및 잔압"),
+          Text(gasSummary, style: TextStyle(fontSize: 13)),
+
+          SizedBox(height: 10),
+
+          // --- 경고창 (있을 경우에만 강조) ---
+          Container(
+            padding: EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: result.isFeasible
+                  ? Colors.blue.withOpacity(0.1)
+                  : Colors.red.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              warnings,
+              style: TextStyle(
+                fontSize: 12,
+                color: result.isFeasible ? Colors.blue[800] : Colors.red[800],
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+      confirm: TextButton(
+        onPressed: () => Get.back(),
+        child: Text("확인", style: TextStyle(fontWeight: FontWeight.bold)),
+      ),
+    );
+  }
+
+  // 헬퍼 위젯: 섹션 타이틀
+  Widget _buildSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          color: Colors.blueGrey,
+        ),
+      ),
+    );
+  }
+
+  // 헬퍼 위젯: 데이터 행
+  Widget _buildInfoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: TextStyle(fontSize: 13, color: Colors.black54)),
+          Text(
+            value,
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
   }
 }
