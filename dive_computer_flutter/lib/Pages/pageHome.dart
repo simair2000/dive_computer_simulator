@@ -31,7 +31,7 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
     text: '0',
   ); // 헬륨 컨트롤러 추가
 
-  bool _showTissueLoadingDetails = false;
+  bool _showTissueLoadingDetails = true;
   DiveMoveStatus _currentMoveStatus = DiveMoveStatus.onStop;
 
   Timer? _moveTimer;
@@ -436,73 +436,114 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                               .color(colorMain)
                               .weight(FontWeight.bold)
                               .marginOnly(bottom: 10),
-                          Button(
-                            child: Text(
-                              _showTissueLoadingDetails
-                                  ? 'Hide details'
-                                  : 'Show details',
-                            ).color(Colors.white),
-                            onPressed: () {
-                              setState(() {
-                                _showTissueLoadingDetails =
-                                    !_showTissueLoadingDetails;
-                                if (GetPlatform.isWindows) {
-                                  windowManager.setSize(
-                                    Size(
-                                      900,
-                                      _showTissueLoadingDetails ? 950 : 650,
-                                    ),
-                                  );
-                                }
-                              });
-                            },
-                          ),
+                          // Button(
+                          //   child: Text(
+                          //     _showTissueLoadingDetails
+                          //         ? 'Hide details'
+                          //         : 'Show details',
+                          //   ).color(Colors.white),
+                          //   onPressed: () {
+                          //     setState(() {
+                          //       _showTissueLoadingDetails =
+                          //           !_showTissueLoadingDetails;
+                          //       if (GetPlatform.isWindows) {
+                          //         windowManager.setSize(
+                          //           Size(
+                          //             900,
+                          //             _showTissueLoadingDetails ? 950 : 650,
+                          //           ),
+                          //         );
+                          //       }
+                          //     });
+                          //   },
+                          // ),
                         ],
                       ).marginOnly(bottom: 5),
-                      Builder(
-                        builder: (context) {
-                          return Container(
-                            padding: EdgeInsets.symmetric(vertical: 5),
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [
-                                  Colors.green,
-                                  Colors.yellow,
-                                  Colors.yellow,
-                                  Colors.red,
-                                ],
-                                stops: [0, 0.4, 0.9, 1.0],
-                              ),
-                            ),
-                            child: Column(
-                              children: List.generate(
-                                _buhlmann.currentLoadings.length,
-                                (index) {
-                                  // 총 기체 압력 = 질소 압력 + 헬륨 압력
-                                  double pTotal =
-                                      _buhlmann.currentLoadings[index] +
-                                      _buhlmann.currentHeLoadings[index];
-                                  double width = pTotal * 150;
-                                  if (450 < width) width = 450;
-                                  return Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Container(
-                                        color: Colors.black,
-                                        height: 1,
-                                        width: width,
+                      // 조직도 시각화 부분
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          double maxWidth = constraints.maxWidth;
+                          // 질소+헬륨의 초기 상태(해수면) 압력은 약 0.79 bar입니다.
+                          // 최대 표시 한계를 3.5 bar 정도로 설정하거나,
+                          // 조직의 한계치(M-value)가 있다면 그것을 기준으로 삼는 것이 좋지만,
+                          // 여기서는 직관적인 비율을 위해 최대 4.0 bar를 기준으로 시각화합니다.
+                          const double maxDisplayPressure = 4.0;
+
+                          return Column(
+                            children: List.generate(
+                              _buhlmann.currentLoadings.length,
+                              (index) {
+                                // 1. 현재 조직의 총 불활성 기체 압력 (N2 + He)
+                                double pTotal =
+                                    _buhlmann.currentLoadings[index] +
+                                    _buhlmann.currentHeLoadings[index];
+
+                                // 2. 너비 계산 (전체 maxWidth 대비 pTotal의 비율)
+                                // 0.79 bar(해수면) 이하는 아주 짧게, 그 이상은 비례해서 길어짐
+                                double barWidth =
+                                    (pTotal / maxDisplayPressure) * maxWidth;
+                                if (barWidth > maxWidth) barWidth = maxWidth;
+                                if (barWidth < 5) barWidth = 5; // 최소 길이 확보
+
+                                return Row(
+                                  children: [
+                                    // 조직 번호 (1~16)
+                                    SizedBox(
+                                      width: 25,
+                                      child: Text('${index + 1}')
+                                          .size(10)
+                                          .color(colorMain.withOpacity(0.7)),
+                                    ),
+                                    // 실제 게이지 바
+                                    Expanded(
+                                      child: Stack(
+                                        children: [
+                                          // 배경 (회색 바)
+                                          Container(
+                                            height: 10,
+                                            decoration: BoxDecoration(
+                                              borderRadius:
+                                                  BorderRadius.circular(2),
+                                              gradient: LinearGradient(
+                                                colors: [
+                                                  Colors.green,
+                                                  Colors.yellow,
+                                                  Colors.yellow,
+                                                  Colors.red,
+                                                ],
+                                                // 압력이 낮을 땐 녹색, 높을수록 빨간색 영역이 보이도록 설정
+                                                stops: [0, 0.4, 0.9, 1.0],
+                                              ),
+                                            ),
+                                          ),
+                                          // 부하량 표시 바 (그라데이션 적용)
+                                          AnimatedContainer(
+                                            duration: Duration(
+                                              milliseconds: 300,
+                                            ),
+                                            height: 10,
+                                            width: barWidth,
+                                            decoration: BoxDecoration(
+                                              color: Colors.blueAccent,
+                                              borderRadius:
+                                                  BorderRadius.circular(2),
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                      Visibility(
-                                        visible: _showTissueLoadingDetails,
+                                    ),
+                                    // 상세 수치 표시 (상세보기 모드일 때만)
+                                    if (_showTissueLoadingDetails)
+                                      Container(
+                                        width: 45,
+                                        alignment: Alignment.centerRight,
                                         child: Text(
                                           pTotal.toStringAsFixed(2),
-                                        ).color(Colors.white),
+                                        ).size(11).color(colorMain),
                                       ),
-                                    ],
-                                  ).marginOnly(bottom: 5);
-                                },
-                              ),
+                                  ],
+                                );
+                              },
                             ),
                           );
                         },

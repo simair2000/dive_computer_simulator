@@ -431,14 +431,22 @@ class Buhlmann {
         break;
       }
     }
-    if (currentDeepestStop == 0)
+    if (currentDeepestStop == 0) {
       currentDeepestStop = (currentDepth.value / 3).ceil() * 3;
+    }
 
     if (_decoAnchorDepth == 0 || currentDeepestStop > _decoAnchorDepth) {
       _decoAnchorDepth = currentDeepestStop;
     }
 
-    double gfSlope = (gfHigh - gfLow) / (0.0 - _decoAnchorDepth.toDouble());
+    // double gfSlope = (gfHigh - gfLow) / (0.0 - _decoAnchorDepth.toDouble());
+    double firstStopDepth = _decoAnchorDepth.toDouble();
+    double gfAtDepth(double depth) {
+      if (depth >= firstStopDepth) return gfLow;
+
+      double fraction = depth / firstStopDepth;
+      return gfLow + (gfHigh - gfLow) * (1.0 - fraction);
+    }
 
     int currentSimDepth = _decoAnchorDepth;
     int requiredTime = 0;
@@ -447,7 +455,8 @@ class Buhlmann {
       double nextDepth = (currentSimDepth - 3).toDouble();
       if (nextDepth < 0) nextDepth = 0.0;
 
-      double targetGf = gfHigh + (gfSlope * nextDepth);
+      // double targetGf = gfHigh + (gfSlope * nextDepth);
+      double targetGf = gfAtDepth(nextDepth.toDouble());
       if (targetGf > gfHigh) targetGf = gfHigh;
       if (targetGf < gfLow) targetGf = gfLow;
 
@@ -545,13 +554,21 @@ class Buhlmann {
       simDepth = deepestStop.toDouble();
     }
 
-    double gfSlope = (gfHigh - gfLow) / (0.0 - deepestStop.toDouble());
+    // double gfSlope = (gfHigh - gfLow) / (0.0 - deepestStop.toDouble());
+    double firstStopDepth = deepestStop.toDouble();
+    double gfAtDepth(double depth) {
+      if (depth >= firstStopDepth) return gfLow;
+
+      double fraction = depth / firstStopDepth;
+      return gfLow + (gfHigh - gfLow) * (1.0 - fraction);
+    }
 
     while (simDepth > 0) {
       double nextDepth = simDepth - 3.0;
       if (nextDepth < 0) nextDepth = 0.0;
 
-      double targetGf = gfHigh + (gfSlope * nextDepth);
+      // double targetGf = gfHigh + (gfSlope * nextDepth);
+      double targetGf = gfAtDepth(nextDepth.toDouble());
       bool canAscend = isDepthSafe(
         nextDepth,
         tempN2Loadings,
@@ -1191,3 +1208,613 @@ class PadiRdp {
     return 27; // NDL을 넘긴 경우 OOR
   }
 }
+
+
+// import 'dart:async';
+// import 'dart:math';
+// import 'package:flutter/material.dart';
+
+// // ZHL-16C 질소 반감기 (단위: 분)
+// const List<double> n2HalfLives = [
+//   4.0,
+//   5.0,
+//   8.0,
+//   12.5,
+//   18.5,
+//   27.0,
+//   38.3,
+//   54.3,
+//   77.0,
+//   109.0,
+//   146.0,
+//   187.0,
+//   239.0,
+//   305.0,
+//   390.0,
+//   635.0,
+// ];
+
+// // N2 A 계수
+// const List<double> aCoefficients = [
+//   1.2599,
+//   1.0000,
+//   0.8618,
+//   0.7562,
+//   0.6667,
+//   0.5600,
+//   0.4947,
+//   0.4500,
+//   0.4187,
+//   0.3798,
+//   0.3497,
+//   0.3223,
+//   0.2850,
+//   0.2737,
+//   0.2523,
+//   0.2327,
+// ];
+
+// // N2 B 계수
+// const List<double> bCoefficients = [
+//   0.5050,
+//   0.5533,
+//   0.6122,
+//   0.6626,
+//   0.7004,
+//   0.7541,
+//   0.7957,
+//   0.8279,
+//   0.8491,
+//   0.8732,
+//   0.8910,
+//   0.9092,
+//   0.9222,
+//   0.9319,
+//   0.9508,
+//   0.9650,
+// ];
+
+// // ZHL-16C 헬륨 반감기 (단위: 분)
+// const List<double> heHalfLives = [
+//   1.88,
+//   3.02,
+//   4.72,
+//   7.30,
+//   11.50,
+//   19.00,
+//   30.20,
+//   49.00,
+//   73.00,
+//   146.00,
+//   205.00,
+//   304.00,
+//   425.00,
+//   571.00,
+//   739.00,
+//   850.00,
+// ];
+
+// // 헬륨 A 계수
+// const List<double> aHeCoefficients = [
+//   1.7424,
+//   1.3830,
+//   1.1919,
+//   1.0458,
+//   0.9220,
+//   0.8205,
+//   0.7305,
+//   0.6502,
+//   0.5950,
+//   0.5545,
+//   0.5333,
+//   0.5189,
+//   0.5181,
+//   0.5176,
+//   0.5172,
+//   0.5119,
+// ];
+
+// // 헬륨 B 계수
+// const List<double> bHeCoefficients = [
+//   0.4245,
+//   0.5747,
+//   0.6527,
+//   0.7222,
+//   0.7582,
+//   0.7957,
+//   0.8279,
+//   0.8553,
+//   0.8757,
+//   0.8903,
+//   0.8997,
+//   0.9073,
+//   0.9122,
+//   0.9171,
+//   0.9217,
+//   0.9267,
+// ];
+
+// // 시뮬레이션 배속 (기본 1배속)
+// int timeMultiplier = 1;
+
+// const double intervalSeconds = 1; // 알고리즘 계산 주기 (초 단위)
+// const double WATER_VAPOR_PRESSURE = 0.0627; // in bar, at 37°C 폐속 수증기압
+// const int NUM_COMPARTMENTS = 16; // Compartment 개수
+
+// enum DiveMoveStatus { onAscending, onDescending, onStop }
+
+// class Buhlmann {
+//   /// ---------------------------
+//   /// Dive state
+//   /// ---------------------------
+
+//   final ValueNotifier<bool> isOnDiving = ValueNotifier(false);
+
+//   final ValueNotifier<int> currentDiveTime = ValueNotifier(0);
+//   final ValueNotifier<int> surfaceTime = ValueNotifier(0);
+//   final ValueNotifier<int> diveCount = ValueNotifier(0);
+
+//   int updateTick = 0;
+
+//   /// ---------------------------
+//   /// Depth
+//   /// ---------------------------
+
+//   final ValueNotifier<double> currentDepth = ValueNotifier(0);
+//   final ValueNotifier<double> maxDepth = ValueNotifier(0);
+
+//   double previousDepth = 0;
+
+//   /// ---------------------------
+//   /// Deco information
+//   /// ---------------------------
+
+//   final ValueNotifier<int> ndl = ValueNotifier(0);
+//   final ValueNotifier<int> tts = ValueNotifier(0);
+
+//   final ValueNotifier<bool> needDeco = ValueNotifier(false);
+//   final ValueNotifier<double> decoStopDepth = ValueNotifier(0);
+//   final ValueNotifier<int> decoStopTime = ValueNotifier(0);
+
+//   /// ---------------------------
+//   /// Safety stop
+//   /// ---------------------------
+
+//   final ValueNotifier<bool> safetyStop = ValueNotifier(false);
+
+//   /// ---------------------------
+//   /// Pressure group
+//   /// ---------------------------
+
+//   final ValueNotifier<int> currentPressureGroup = ValueNotifier(0);
+
+//   /// ---------------------------
+//   /// Oxygen
+//   /// ---------------------------
+
+//   final ValueNotifier<double> currentPO2 = ValueNotifier(0);
+//   final ValueNotifier<double> currentCNS = ValueNotifier(0);
+//   final ValueNotifier<double> otu = ValueNotifier(0);
+
+//   /// ---------------------------
+//   /// Advanced metrics
+//   /// ---------------------------
+
+//   final ValueNotifier<double> ceiling = ValueNotifier(0);
+//   final ValueNotifier<double> gf99 = ValueNotifier(0);
+//   final ValueNotifier<double> gfSurf = ValueNotifier(0);
+//   final ValueNotifier<double> gasDensity = ValueNotifier(0);
+//   final ValueNotifier<double> endDepth = ValueNotifier(0);
+
+//   final ValueNotifier<bool> ascentViolation = ValueNotifier(false);
+//   final ValueNotifier<bool> missedDeco = ValueNotifier(false);
+
+//   /// ---------------------------
+//   /// Gas
+//   /// ---------------------------
+
+//   double fractionO2 = 0.21;
+//   double fractionHe = 0;
+//   double fractionN2 = 0.79;
+
+//   double mod = 56;
+
+//   /// ---------------------------
+//   /// Gradient factor
+//   /// ---------------------------
+
+//   double gfLow = 0.30;
+//   double gfHigh = 0.85;
+
+//   /// ---------------------------
+//   /// Tissue loading
+//   /// ---------------------------
+
+//   List<double> currentLoadings = List.filled(NUM_COMPARTMENTS, 0);
+
+//   List<double> currentHeLoadings = List.filled(NUM_COMPARTMENTS, 0);
+
+//   /// ---------------------------
+//   /// Timer
+//   /// ---------------------------
+
+//   Timer? timer;
+//   int interval = 1;
+
+//   Buhlmann() {
+//     double initialN2 = (1 - WATER_VAPOR_PRESSURE) * 0.79;
+
+//     for (int i = 0; i < NUM_COMPARTMENTS; i++) {
+//       currentLoadings[i] = initialN2;
+//       currentHeLoadings[i] = 0;
+//     }
+//   }
+
+//   /// ---------------------------
+//   /// Gas setup
+//   /// ---------------------------
+
+//   void setGas(double o2, double he) {
+//     fractionO2 = o2;
+//     fractionHe = he;
+//     fractionN2 = 1 - o2 - he;
+
+//     mod = ((1.4 / fractionO2) * 10) - 10;
+//   }
+
+//   /// ---------------------------
+//   /// Update speed
+//   /// ---------------------------
+
+//   void setSpeed(int sec) {
+//     interval = sec;
+
+//     timer?.cancel();
+
+//     timer = Timer.periodic(Duration(seconds: interval), (_) => process());
+//   }
+
+//   /// ---------------------------
+//   /// Depth update
+//   /// ---------------------------
+
+//   void updateDepth(double depth) {
+//     previousDepth = currentDepth.value;
+//     currentDepth.value = depth;
+
+//     if (depth > maxDepth.value) {
+//       maxDepth.value = depth;
+//     }
+
+//     if (depth > 1) {
+//       if (!isOnDiving.value) {
+//         startDive();
+//       }
+//     } else {
+//       if (isOnDiving.value) {
+//         endDive();
+//       }
+//     }
+//   }
+
+//   /// ---------------------------
+//   /// Dive start
+//   /// ---------------------------
+
+//   void startDive() {
+//     isOnDiving.value = true;
+//     currentDiveTime.value = 0;
+//     surfaceTime.value = 0;
+
+//     diveCount.value++;
+//   }
+
+//   /// ---------------------------
+//   /// Dive end
+//   /// ---------------------------
+
+//   void endDive() {
+//     isOnDiving.value = false;
+//     maxDepth.value = 0;
+//   }
+
+//   /// ---------------------------
+//   /// Main process
+//   /// ---------------------------
+
+//   void process() {
+//     updateTick++;
+
+//     if (isOnDiving.value) {
+//       currentDiveTime.value += interval;
+//     } else {
+//       surfaceTime.value += interval;
+//     }
+
+//     updateGasLoadings();
+
+//     updatePO2();
+//     updateCNS();
+//     updateOTU();
+
+//     ceiling.value = calculateCeiling(gfHigh);
+
+//     gf99.value = calculateGF99();
+//     gfSurf.value = calculateGF99();
+
+//     gasDensity.value = calculateGasDensity();
+//     endDepth.value = calculateEND();
+
+//     updateNDL();
+//     updateDeco();
+//     updateTTS();
+
+//     checkSafetyStop();
+//     checkAscentRate();
+//     checkMissedDeco();
+//   }
+
+//   /// ---------------------------
+//   /// Tissue loading
+//   /// ---------------------------
+
+//   void updateGasLoadings() {
+//     double timeMin = interval / 60;
+
+//     double pAmbStart = 1 + previousDepth / 10;
+
+//     double pAmbEnd = 1 + currentDepth.value / 10;
+
+//     double pN2Start = (pAmbStart - WATER_VAPOR_PRESSURE) * fractionN2;
+
+//     double pN2End = (pAmbEnd - WATER_VAPOR_PRESSURE) * fractionN2;
+
+//     double pHeStart = (pAmbStart - WATER_VAPOR_PRESSURE) * fractionHe;
+
+//     double pHeEnd = (pAmbEnd - WATER_VAPOR_PRESSURE) * fractionHe;
+
+//     double rN2 = (pN2End - pN2Start) / timeMin;
+
+//     double rHe = (pHeEnd - pHeStart) / timeMin;
+
+//     for (int i = 0; i < NUM_COMPARTMENTS; i++) {
+//       currentLoadings[i] = schreiner(
+//         currentLoadings[i],
+//         pN2Start,
+//         rN2,
+//         timeMin,
+//         n2HalfLives[i],
+//       );
+
+//       currentHeLoadings[i] = schreiner(
+//         currentHeLoadings[i],
+//         pHeStart,
+//         rHe,
+//         timeMin,
+//         heHalfLives[i],
+//       );
+//     }
+//   }
+
+//   double schreiner(
+//     double pi,
+//     double pGasStart,
+//     double r,
+//     double t,
+//     double halfLife,
+//   ) {
+//     double k = log(2) / halfLife;
+
+//     return pGasStart + r * (t - 1 / k) - (pGasStart - pi - r / k) * exp(-k * t);
+//   }
+
+//   /// ---------------------------
+//   /// NDL
+//   /// ---------------------------
+
+//   void updateNDL() {
+//     int remaining = 0;
+
+//     for (int t = 1; t <= 300; t++) {
+//       if (!isDepthSafe(currentDepth.value, gfHigh, t)) break;
+
+//       remaining = t;
+//     }
+
+//     ndl.value = remaining;
+//   }
+
+//   bool isDepthSafe(double depth, double gf, int minutes) {
+//     List<double> simN2 = List.from(currentLoadings);
+
+//     List<double> simHe = List.from(currentHeLoadings);
+
+//     double pressure = 1 + depth / 10;
+
+//     double pN2 = (pressure - WATER_VAPOR_PRESSURE) * fractionN2;
+
+//     double pHe = (pressure - WATER_VAPOR_PRESSURE) * fractionHe;
+
+//     for (int m = 0; m < minutes; m++) {
+//       for (int i = 0; i < NUM_COMPARTMENTS; i++) {
+//         simN2[i] += (pN2 - simN2[i]) * (1 - exp(-log(2) / n2HalfLives[i]));
+
+//         simHe[i] += (pHe - simHe[i]) * (1 - exp(-log(2) / heHalfLives[i]));
+//       }
+//     }
+
+//     for (int i = 0; i < NUM_COMPARTMENTS; i++) {
+//       double pTotal = simN2[i] + simHe[i];
+
+//       double a =
+//           ((aCoefficients[i] * simN2[i]) + (aHeCoefficients[i] * simHe[i])) /
+//           pTotal;
+
+//       double b =
+//           ((bCoefficients[i] * simN2[i]) + (bHeCoefficients[i] * simHe[i])) /
+//           pTotal;
+
+//       double m = a + pressure / b;
+
+//       double limit = pressure + gf * (m - pressure);
+
+//       if (pTotal > limit) return false;
+//     }
+
+//     return true;
+//   }
+
+//   /// ---------------------------
+//   /// Deco
+//   /// ---------------------------
+
+//   void updateDeco() {
+//     if (ceiling.value > 0) {
+//       needDeco.value = true;
+
+//       decoStopDepth.value = (ceiling.value / 3).ceil() * 3;
+
+//       decoStopTime.value = 1;
+//     } else {
+//       needDeco.value = false;
+//     }
+//   }
+
+//   void updateTTS() {
+//     if (!needDeco.value) {
+//       tts.value = 0;
+//       return;
+//     }
+
+//     tts.value = decoStopTime.value + (currentDepth.value / 10).ceil();
+//   }
+
+//   /// ---------------------------
+//   /// PO2
+//   /// ---------------------------
+
+//   void updatePO2() {
+//     currentPO2.value = (1 + currentDepth.value / 10) * fractionO2;
+//   }
+
+//   void updateCNS() {
+//     if (currentPO2.value < 0.5) return;
+
+//     double rate = pow(currentPO2.value - 0.5, 2).toDouble();
+
+//     currentCNS.value += rate / 60;
+//   }
+
+//   void updateOTU() {
+//     if (currentPO2.value < 0.5) return;
+
+//     double rate = pow((currentPO2.value - 0.5) / 0.5, 0.83).toDouble();
+
+//     otu.value += rate / 60;
+//   }
+
+//   /// ---------------------------
+//   /// Safety stop
+//   /// ---------------------------
+
+//   void checkSafetyStop() {
+//     if (maxDepth.value > 10 && currentDepth.value <= 5) {
+//       safetyStop.value = true;
+//     }
+//   }
+
+//   /// ---------------------------
+//   /// Ascent
+//   /// ---------------------------
+
+//   void checkAscentRate() {
+//     double rate = (previousDepth - currentDepth.value) / (interval / 60);
+
+//     ascentViolation.value = rate > 10;
+//   }
+
+//   /// ---------------------------
+//   /// Missed deco
+//   /// ---------------------------
+
+//   void checkMissedDeco() {
+//     if (currentDepth.value < ceiling.value - 1) {
+//       missedDeco.value = true;
+//     } else {
+//       missedDeco.value = false;
+//     }
+//   }
+
+//   /// ---------------------------
+//   /// Advanced metrics
+//   /// ---------------------------
+
+//   double calculateCeiling(double gf) {
+//     double ceilingDepth = 0;
+
+//     for (int i = 0; i < NUM_COMPARTMENTS; i++) {
+//       double pTotal = currentLoadings[i] + currentHeLoadings[i];
+
+//       if (pTotal <= 0) continue;
+
+//       double a =
+//           ((aCoefficients[i] * currentLoadings[i]) +
+//               (aHeCoefficients[i] * currentHeLoadings[i])) /
+//           pTotal;
+
+//       double b =
+//           ((bCoefficients[i] * currentLoadings[i]) +
+//               (bHeCoefficients[i] * currentHeLoadings[i])) /
+//           pTotal;
+
+//       double tolerated = (pTotal - a * gf) / (gf / b + 1 - gf);
+
+//       double depth = (tolerated - 1) * 10;
+
+//       if (depth > ceilingDepth) ceilingDepth = depth;
+//     }
+
+//     return ceilingDepth;
+//   }
+
+//   double calculateGF99() {
+//     double maxGF = 0;
+
+//     for (int i = 0; i < NUM_COMPARTMENTS; i++) {
+//       double pTotal = currentLoadings[i] + currentHeLoadings[i];
+
+//       if (pTotal <= 0) continue;
+
+//       double a =
+//           ((aCoefficients[i] * currentLoadings[i]) +
+//               (aHeCoefficients[i] * currentHeLoadings[i])) /
+//           pTotal;
+
+//       double b =
+//           ((bCoefficients[i] * currentLoadings[i]) +
+//               (bHeCoefficients[i] * currentHeLoadings[i])) /
+//           pTotal;
+
+//       double m = a + (1 / b);
+
+//       double gf = (pTotal - 1) / (m - 1);
+
+//       if (gf > maxGF) maxGF = gf;
+//     }
+
+//     return maxGF * 100;
+//   }
+
+//   double calculateGasDensity() {
+//     double pressure = 1 + currentDepth.value / 10;
+
+//     return pressure *
+//         (fractionO2 * 1.429 + fractionN2 * 1.251 + fractionHe * 0.178);
+//   }
+
+//   double calculateEND() {
+//     double narcotic = fractionO2 + fractionN2;
+
+//     return ((currentDepth.value + 10) * narcotic / 0.79) - 10;
+//   }
+// }

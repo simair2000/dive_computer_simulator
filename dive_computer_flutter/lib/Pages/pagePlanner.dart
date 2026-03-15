@@ -412,7 +412,7 @@ class _PagePlannerState extends State<PagePlanner> {
 
   Widget _cylinderList() {
     return SizedBox(
-      height: 190,
+      height: 120,
       child: Scrollbar(
         controller: _horizontalScrollController,
         thumbVisibility: true,
@@ -426,6 +426,8 @@ class _PagePlannerState extends State<PagePlanner> {
           itemBuilder: (context, index) {
             Cylinder cylinder = cylinders[index];
             double consumption = _planResult?.gasConsumption[cylinder] ?? 0;
+            int remainingPressure =
+                _planResult?.remainingPressure[cylinder] ?? 0;
             double remain = cylinder.totalLiters - consumption;
             double fillRatio = cylinder.totalLiters > 0
                 ? (remain / cylinder.totalLiters).clamp(0.0, 1.0)
@@ -444,12 +446,11 @@ class _PagePlannerState extends State<PagePlanner> {
                   stops: [fillRatio, fillRatio],
                 ),
               ),
-              padding: const EdgeInsets.only(bottom: 10, left: 10),
+              padding: const EdgeInsets.only(top: 10),
               child: Stack(
                 alignment: AlignmentGeometry.topRight,
                 children: [
-                  Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  Row(
                     children: [
                       cylinder.count == 1
                           ? Image.asset(
@@ -463,13 +464,13 @@ class _PagePlannerState extends State<PagePlanner> {
                               scale: 6,
                             ),
                       Text(
-                            '${cylinder.name}\nVolume : ${cylinder.totalLiters} L\nRemain : ${remain.toStringAsFixed(1)} L',
+                            '${cylinder.name}\nVolume : ${cylinder.totalLiters} L\nRemain : ${remain.toStringAsFixed(1)} L\n${remainingPressure}bar',
                           )
                           .color(colorMain)
                           .align(TextAlign.center)
                           .marginOnly(top: 10),
                     ],
-                  ).marginOnly(right: 30),
+                  ).marginOnly(right: 50),
                   IconButton(
                     onPressed: () {
                       setState(() {
@@ -492,52 +493,270 @@ class _PagePlannerState extends State<PagePlanner> {
   }
 
   Widget _divePlanResult() {
-    return _planResult == null
-        ? Container()
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    if (_planResult == null) return Container();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 상단 요약 카드
+        _buildSummaryCard(),
+        const SizedBox(height: 20),
+
+        Text('Dive Profile')
+            .weight(FontWeight.bold)
+            .color(colorMain)
+            .size(18)
+            .marginOnly(bottom: 15),
+
+        // 타임라인 리스트
+        Container(
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(color: colorMain.withAlpha(100), width: 3),
+            ),
+          ),
+          margin: EdgeInsets.only(left: 10),
+          child: ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: _planResult!.isFeasible
+                ? _planResult!.profile.length
+                : _planResult!.warnings.length,
+            itemBuilder: (context, index) {
+              return _planResult!.isFeasible
+                  ? _buildProfileStepCard(_planResult!.profile[index])
+                  : _buildWarningCard(_planResult!.warnings[index]);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWarningCard(String warning) {
+    return Container(
+      margin: EdgeInsets.only(left: 20, bottom: 10),
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.red.withAlpha(20),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.red.withAlpha(100)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.report_problem, color: Colors.red),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(warning).color(Colors.red).weight(FontWeight.w500),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProfileStepCard(DiveStep profile) {
+    IconData stepIcon = Icons.arrow_downward;
+    Color stepColor = colorMain;
+    String phaseName = profile.phase;
+
+    // 페이즈별 아이콘 및 색상 분기
+    switch (profile.phase) {
+      case 'Descent':
+        stepIcon = Icons.south_east;
+        stepColor = Colors.blue;
+        break;
+      case 'Bottom':
+        stepIcon = Icons.anchor;
+        stepColor = Colors.indigoAccent; // 커스텀 컬러 혹은 Colors.indigo
+        break;
+      case 'Ascent':
+        stepIcon = Icons.north_east;
+        stepColor = Colors.lightBlue;
+        break;
+      case 'Deco':
+        stepIcon = Icons.timer_outlined;
+        stepColor = Colors.orange;
+        break;
+      case 'Gas Switch':
+        stepIcon = Icons.published_with_changes;
+        stepColor = Colors.purple;
+        break;
+    }
+
+    return Stack(
+      children: [
+        // 타임라인 왼쪽 점
+        Positioned(
+          left: -6,
+          top: 20,
+          child: Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(color: stepColor, shape: BoxShape.circle),
+          ),
+        ),
+        Container(
+          margin: EdgeInsets.only(left: 20, bottom: 10),
+          padding: EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: stepColor.withAlpha(15),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: stepColor.withAlpha(50)),
+          ),
+          child: Row(
             children: [
-              Text(
-                    _planResult!.isFeasible
-                        ? 'Total dive time : ${_planResult!.totalDiveTime}min'
-                        : '🚨 This dive is impossible or very dangerous with the current gas/set!',
-                  )
-                  .color(colorMain)
-                  .weight(FontWeight.bold)
-                  .size(17)
-                  .marginOnly(bottom: 20),
-              Container(
-                decoration: BoxDecoration(
-                  border: Border.all(color: colorMain.withAlpha(200)),
-                  borderRadius: BorderRadius.all(Radius.circular(8)),
+              // 왼쪽: 아이콘 및 페이즈 명
+              Column(
+                children: [
+                  Icon(stepIcon, color: stepColor, size: 28),
+                  Text(
+                    phaseName,
+                  ).size(10).color(stepColor).weight(FontWeight.bold),
+                ],
+              ).marginOnly(right: 15),
+
+              // 중앙: 수심 및 시간 정보
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          '${profile.depth}m',
+                        ).size(20).weight(FontWeight.bold).color(colorMain),
+                        const SizedBox(width: 10),
+                        Text(
+                          '${profile.time.toStringAsFixed(1)} min',
+                        ).size(14).color(Colors.grey[700]!),
+                      ],
+                    ),
+                    if (profile.phase == "Gas Switch")
+                      Text(
+                        'Switch to ${profile.gasUsed.name}',
+                      ).color(Colors.purple).weight(FontWeight.bold).size(12)
+                    else
+                      Text('Runtime step').size(11).color(Colors.grey),
+                  ],
                 ),
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(), // Scroll 충돌 방지
-                  itemCount: _planResult!.isFeasible
-                      ? _planResult!.profile.length
-                      : _planResult!.warnings.length,
-                  separatorBuilder: (context, index) {
-                    return Container(color: colorMain.withAlpha(60), height: 1);
-                  },
-                  itemBuilder: (context, index) {
-                    return Container(
-                      padding: EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: 10,
-                      ),
-                      color: index.isOdd
-                          ? colorMain.withAlpha(20)
-                          : Colors.transparent,
-                      child: _planResult!.isFeasible
-                          ? _profileView(_planResult!.profile[index])
-                          : _warningView(_planResult!.warnings[index]),
-                    );
-                  },
+              ),
+
+              // 오른쪽: 사용 기체 태그
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: colorMain,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  profile.gasUsed.name,
+                ).color(Colors.white).size(11).weight(FontWeight.bold),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // 요약 카드 (총 시간 등)
+  Widget _buildSummaryCard() {
+    bool isFeasible = _planResult!.isFeasible;
+    List<String> warnings = _planResult!.warnings;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        // 계획 가능 여부에 따라 배경색 변경
+        color: isFeasible
+            ? Colors.green.withAlpha(25)
+            : Colors.red.withAlpha(25),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isFeasible
+              ? Colors.green.withAlpha(150)
+              : Colors.red.withAlpha(150),
+          width: 2,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              // 상태 아이콘
+              Icon(
+                isFeasible ? Icons.check_circle : Icons.dangerous,
+                color: isFeasible ? Colors.green : Colors.red,
+                size: 40,
+              ).marginOnly(right: 15),
+
+              // 핵심 정보 (상태 및 총 시간)
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                          isFeasible
+                              ? 'Plan Feasible'
+                              : 'Plan Impossible / Critical',
+                        )
+                        .weight(FontWeight.bold)
+                        .size(18)
+                        .color(
+                          isFeasible ? Colors.green[800]! : Colors.red[800]!,
+                        ),
+                    Text(
+                      'Total Runtime: ${_planResult!.totalDiveTime.toStringAsFixed(1)} min',
+                    ).color(colorMain).size(15),
+                  ],
                 ),
               ),
             ],
-          );
+          ),
+
+          // 경고 메시지가 있을 경우 표시되는 영역
+          if (warnings.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 10),
+              child: Divider(height: 1, thickness: 1, color: Colors.black12),
+            ),
+            ...warnings
+                .map(
+                  (msg) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          msg.contains('CRITICAL')
+                              ? Icons.report
+                              : Icons.warning_amber_rounded,
+                          size: 18,
+                          color: msg.contains('CRITICAL')
+                              ? Colors.red
+                              : Colors.orange[800],
+                        ).marginOnly(right: 8, top: 2),
+                        Expanded(
+                          child: Text(msg)
+                              .size(13)
+                              .color(
+                                msg.contains('CRITICAL')
+                                    ? Colors.red[900]!
+                                    : Colors.orange[900]!,
+                              )
+                              .weight(FontWeight.w500),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+                .toList(),
+          ],
+        ],
+      ),
+    );
   }
 
   void _startDivePlan() {
@@ -573,26 +792,9 @@ class _PagePlannerState extends State<PagePlanner> {
       gfLowVal = APref.getData(AprefKey.GF_LOW) ?? 0.30;
     } catch (_) {}
 
-    DivePlanner planner = DivePlanner(gfHigh: gfHighVal, gfLow: gfLowVal);
+    DivePlanner2 planner = DivePlanner2(gfHigh: gfHighVal, gfLow: gfLowVal);
     _planResult = planner.generatePlan(input);
 
     setState(() {});
-  }
-
-  Widget _profileView(DiveStep profile) {
-    String msg = '';
-    if (profile.phase == "Gas Switch") {
-      msg =
-          '>> Reached ${profile.depth}m: Gas switch to [${profile.gasUsed.name}] cylinder! <<';
-    } else {
-      // [수정점] msg = msg = 이중할당 오타 수정
-      msg =
-          "${profile.phase} - Depth ${profile.depth}m / ${profile.time} min (Gas: ${profile.gasUsed.name})";
-    }
-    return Text(msg).color(colorMain);
-  }
-
-  Widget _warningView(String warning) {
-    return Text('⚠️ $warning').color(colorMain);
   }
 }
