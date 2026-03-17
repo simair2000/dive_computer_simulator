@@ -32,16 +32,10 @@ class Cylinder {
 
   // 감압용 최대운영수심 (PO2 1.6 기준)
   double get decoMod =>
-      (((APref.getData(AprefKey.PPO2_DECO) as num?)?.toDouble() ??
-              1.6 / fractionO2) *
-          10) -
-      10;
+      ((APref.getData(AprefKey.PPO2_DECO) / fractionO2) * 10) - 10;
   // 바닥 체류용 최대운영수심 (PO2 1.4 기준)
   double get bottomMod =>
-      (((APref.getData(AprefKey.PPO2_BOTTOM) as num?)?.toDouble() ??
-              1.4 / fractionO2) *
-          10) -
-      10;
+      ((APref.getData(AprefKey.PPO2_BOTTOM) / fractionO2) * 10) - 10;
   // 전체 가스 보유량(리터)
   double get totalLiters => volume * count * startPressure;
 }
