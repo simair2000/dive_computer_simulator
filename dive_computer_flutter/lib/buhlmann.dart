@@ -151,7 +151,7 @@ class Buhlmann {
   // var gfHighNotifier = ValueNotifier<double>(85);
   // var gfLowNotifier = ValueNotifier<double>(40);
 
-  var ppo2 = APref.getData(AprefKey.PPO2);
+  var ppo2 = APref.getData(AprefKey.PPO2_BOTTOM);
   double get mod => (((ppo2 / fractionO2) * 10) - 10);
 
   var ndl = ValueNotifier<double>(0.0);

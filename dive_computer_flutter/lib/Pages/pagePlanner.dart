@@ -1,3 +1,5 @@
+// 기존 pagePlanner.dart 전체를 아래 코드로 교체하시면 됩니다. (불필요한 입력 컨트롤러 제거 및 웨이포인트 UI 추가)
+
 import 'dart:math';
 
 import 'package:dive_computer_flutter/aPref.dart';
@@ -12,9 +14,6 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:go_router/go_router.dart';
 
-// ==========================================
-// 1. UI 파트 (PagePlanner)
-// ==========================================
 class PagePlanner extends StatefulWidget {
   const PagePlanner({super.key});
 
@@ -25,48 +24,43 @@ class PagePlanner extends StatefulWidget {
 class _PagePlannerState extends State<PagePlanner> {
   final ScrollController _horizontalScrollController = ScrollController();
 
-  final TextEditingController _textControllerTargetDepth =
-      TextEditingController();
-  final TextEditingController _textControllerBottomTime =
-      TextEditingController();
+  // 멀티레벨 입력용 컨트롤러 및 데이터
+  final TextEditingController _textControllerWpDepth = TextEditingController();
+  final TextEditingController _textControllerWpTime = TextEditingController();
+  final List<DiveWaypoint> waypoints = [];
+
   final TextEditingController _textControllerRMV = TextEditingController(
     text: '20',
   );
-
   final TextEditingController _textControllerCylinderName =
       TextEditingController(text: 'Air');
-
   final TextEditingController _textControllerCylinderVolume =
       TextEditingController(text: '11');
-
   int _cylinderType = 1;
-
   final TextEditingController _textControllerCylinderStartPressure =
       TextEditingController(text: '200');
-
   final TextEditingController _textControllerCylinderO2 = TextEditingController(
     text: '21',
   );
-
   final TextEditingController _textControllerCylinderHe = TextEditingController(
     text: '0',
   );
 
   final List<Cylinder> cylinders = [];
-
   DivePlanResult? _planResult;
+  int _cylinderPurpose = 0; // 0: Bottom, 1: Deco
 
   @override
   void dispose() {
     _horizontalScrollController.dispose();
+    _textControllerWpDepth.dispose();
+    _textControllerWpTime.dispose();
     _textControllerCylinderHe.dispose();
     _textControllerCylinderO2.dispose();
     _textControllerCylinderStartPressure.dispose();
     _textControllerCylinderVolume.dispose();
     _textControllerCylinderName.dispose();
     _textControllerRMV.dispose();
-    _textControllerBottomTime.dispose();
-    _textControllerTargetDepth.dispose();
     super.dispose();
   }
 
@@ -93,11 +87,17 @@ class _PagePlannerState extends State<PagePlanner> {
             icon: Icon(Icons.settings, color: Colors.white),
           ),
           IconButton(
-            tooltip: 'About',
+            tooltip: 'About Dive Planner',
             onPressed: () {
               showGetDialog(
                 'About Dive Planner',
-                'This Dive Planner is an advanced decompression scheduling tool designed for both recreational and technical divers...\n\n',
+                'This Dive Planner is an advanced decompression scheduling tool based on the Bühlmann ZHL-16C algorithm with Gradient Factors (GF).\n\n'
+                    '📌 Features:\n'
+                    '• Multi-Level Diving: Plan complex profiles by adding multiple waypoints (Depth & Time).\n'
+                    '• Gas Management: Supports Air, Nitrox, and Trimix with automatic gas switching logic.\n'
+                    '• RMV Tracking: Accurately calculates gas consumption and estimates remaining cylinder pressures.\n'
+                    '• Deco Profiling: Generates step-by-step ascent and decompression stop schedules dynamically.\n\n'
+                    '⚠️ Warning: This software is purely a simulation tool. Always verify your plans with primary dive computers and never dive beyond your training and personal limits.',
               );
             },
             icon: Icon(Icons.help, color: Colors.white),
@@ -106,6 +106,7 @@ class _PagePlannerState extends State<PagePlanner> {
       ),
       body: Row(
         children: [
+          // 왼쪽: 설정 및 입력 (Waypoints & Cylinders)
           Expanded(
             flex: 2,
             child: Container(
@@ -113,59 +114,111 @@ class _PagePlannerState extends State<PagePlanner> {
               padding: EdgeInsets.all(20),
               child: ListView(
                 children: [
-                  // --- Target Depth, Bottom Time, RMV 입력부 ---
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Target Depth (m)',
-                        ).weight(FontWeight.bold).color(colorMain),
-                      ),
-                      Expanded(
-                        child: InputText(
-                          width: 100,
-                          controller: _textControllerTargetDepth,
-                          textAlign: TextAlign.center,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'^\d*\.?\d*$'),
-                            ),
-                          ],
-                          maxLines: 1,
-                          onFieldSubmitted: (value) {},
-                        ),
-                      ),
-                    ],
-                  ).marginOnly(bottom: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                  // --- Multi-Level Waypoints 입력부 ---
+                  Text('Dive Plan (Multi-Level)')
+                      .weight(FontWeight.bold)
+                      .color(colorMain)
+                      .marginOnly(bottom: 10),
+                  Container(
+                    padding: EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.5),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: colorMain.withOpacity(0.3)),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
                           children: [
-                            Text(
-                              'Bottom time (min)',
-                            ).weight(FontWeight.bold).color(colorMain),
-                            Text('(Include Descent time)').color(colorMain),
+                            Expanded(
+                              child: Text(
+                                'Depth (m)',
+                              ).color(colorMain).size(13),
+                            ),
+                            Expanded(
+                              child: Text(
+                                'Stay Time (min)',
+                              ).color(colorMain).size(13),
+                            ),
+                            SizedBox(width: 40), // 버튼 여백
                           ],
-                        ),
-                      ),
-                      Expanded(
-                        child: InputText(
-                          width: 100,
-                          controller: _textControllerBottomTime,
-                          textAlign: TextAlign.center,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'^\d{0,3}$'),
+                        ).marginOnly(bottom: 5),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: InputText(
+                                controller: _textControllerWpDepth,
+                                textAlign: TextAlign.center,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.allow(
+                                    RegExp(r'^\d*\.?\d*$'),
+                                  ),
+                                ],
+                                maxLines: 1,
+                              ).marginOnly(right: 10),
+                            ),
+                            Expanded(
+                              child: InputText(
+                                controller: _textControllerWpTime,
+                                textAlign: TextAlign.center,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly,
+                                ],
+                                maxLines: 1,
+                              ).marginOnly(right: 10),
+                            ),
+                            IconButton(
+                              onPressed: _addWaypoint,
+                              icon: Icon(
+                                Icons.add_box,
+                                color: colorMain,
+                                size: 35,
+                              ),
+                              padding: EdgeInsets.zero,
                             ),
                           ],
-                          maxLines: 1,
-                          onFieldSubmitted: (value) {},
                         ),
-                      ),
-                    ],
-                  ).marginOnly(bottom: 10),
+                        if (waypoints.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          const Divider(height: 1),
+                          const SizedBox(height: 10),
+                          ListView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: waypoints.length,
+                            itemBuilder: (context, index) {
+                              var wp = waypoints[index];
+                              return Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    '${index + 1}.',
+                                  ).weight(FontWeight.bold).color(colorMain),
+                                  Text('${wp.depth} m').color(Colors.black87),
+                                  Text('${wp.time} min').color(Colors.black87),
+                                  IconButton(
+                                    icon: Icon(
+                                      Icons.delete,
+                                      color: Colors.redAccent,
+                                      size: 20,
+                                    ),
+                                    onPressed: () {
+                                      setState(() {
+                                        waypoints.removeAt(index);
+                                      });
+                                    },
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 15),
+
                   Row(
                     children: [
                       Expanded(
@@ -177,7 +230,7 @@ class _PagePlannerState extends State<PagePlanner> {
                             ).weight(FontWeight.bold).color(colorMain),
                             Text(
                               '(Respiratory Minute Volume)',
-                            ).color(colorMain),
+                            ).color(colorMain).size(11),
                           ],
                         ),
                       ),
@@ -192,18 +245,17 @@ class _PagePlannerState extends State<PagePlanner> {
                             ),
                           ],
                           maxLines: 1,
-                          onFieldSubmitted: (value) {},
                         ),
                       ),
                     ],
                   ),
                   horizontalLine(),
-                  Text('Cylinder')
+
+                  // --- Cylinder 세부 입력부 ---
+                  Text('Gas Cylinders')
                       .weight(FontWeight.bold)
                       .color(colorMain)
                       .marginOnly(bottom: 10),
-
-                  // --- Cylinder 세부 입력부 ---
                   Row(
                     children: [
                       Expanded(child: Text('Type').color(colorMain)),
@@ -230,7 +282,6 @@ class _PagePlannerState extends State<PagePlanner> {
                           controller: _textControllerCylinderName,
                           textAlign: TextAlign.center,
                           maxLines: 1,
-                          onFieldSubmitted: (value) {},
                         ),
                       ),
                     ],
@@ -248,7 +299,6 @@ class _PagePlannerState extends State<PagePlanner> {
                             ),
                           ],
                           maxLines: 1,
-                          onFieldSubmitted: (value) {},
                         ),
                       ),
                     ],
@@ -268,7 +318,39 @@ class _PagePlannerState extends State<PagePlanner> {
                             ),
                           ],
                           maxLines: 1,
-                          onFieldSubmitted: (value) {},
+                        ),
+                      ),
+                    ],
+                  ).marginOnly(bottom: 5),
+                  Row(
+                    children: [
+                      Expanded(child: Text('Purpose').color(colorMain)),
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Button(
+                                height: 46,
+                                color: _cylinderPurpose == 0
+                                    ? colorMain
+                                    : Colors.grey,
+                                child: Text('Bottom').color(Colors.white),
+                                onPressed: () =>
+                                    setState(() => _cylinderPurpose = 0),
+                              ).marginOnly(right: 5),
+                            ),
+                            Expanded(
+                              child: Button(
+                                height: 46,
+                                color: _cylinderPurpose == 1
+                                    ? Colors.orange
+                                    : Colors.grey,
+                                child: Text('Deco').color(Colors.white),
+                                onPressed: () =>
+                                    setState(() => _cylinderPurpose = 1),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -320,6 +402,8 @@ class _PagePlannerState extends State<PagePlanner> {
               ),
             ),
           ),
+
+          // 오른쪽: 결과 화면
           Expanded(
             flex: 3,
             child: Container(
@@ -358,6 +442,27 @@ class _PagePlannerState extends State<PagePlanner> {
     );
   }
 
+  void _addWaypoint() {
+    if (textIsEmpty(_textControllerWpDepth.text) ||
+        textIsEmpty(_textControllerWpTime.text)) {
+      showSnackbar('Error', 'Please enter depth and time');
+      return;
+    }
+    double depth = double.parse(_textControllerWpDepth.text);
+    int time = int.parse(_textControllerWpTime.text);
+
+    if (depth <= 0) {
+      showSnackbar('Error', 'Depth must be greater than 0');
+      return;
+    }
+
+    setState(() {
+      waypoints.add(DiveWaypoint(depth: depth, time: time));
+      _textControllerWpDepth.clear();
+      _textControllerWpTime.clear();
+    });
+  }
+
   void _addCylinder() {
     if (textIsEmpty(_textControllerCylinderName.text)) {
       showSnackbar('Error', 'Please enter cylinder name');
@@ -380,7 +485,6 @@ class _PagePlannerState extends State<PagePlanner> {
       return;
     }
 
-    // [수정점] 기체 성분 논리적 무결성 체크
     double o2Value = double.parse(_textControllerCylinderO2.text);
     double heValue = double.parse(_textControllerCylinderHe.text);
 
@@ -404,6 +508,9 @@ class _PagePlannerState extends State<PagePlanner> {
       startPressure: double.parse(_textControllerCylinderStartPressure.text),
       fractionO2: o2Value / 100.0,
       fractionHe: heValue / 100.0,
+      purpose: _cylinderPurpose == 0
+          ? GasPurpose.bottom
+          : GasPurpose.deco, // <-- 이 부분 추가
     );
     setState(() {
       cylinders.add(cylinder);
@@ -463,12 +570,39 @@ class _PagePlannerState extends State<PagePlanner> {
                               color: colorMain,
                               scale: 6,
                             ),
-                      Text(
-                            '${cylinder.name}\nVolume : ${cylinder.totalLiters} L\nRemain : ${remain.toStringAsFixed(1)} L\n${remainingPressure}bar',
-                          )
-                          .color(colorMain)
-                          .align(TextAlign.center)
-                          .marginOnly(top: 10),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // 용도 뱃지 (Bottom/Deco)
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: cylinder.purpose == GasPurpose.bottom
+                                  ? Colors.blue
+                                  : Colors.orange,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child:
+                                Text(
+                                      cylinder.purpose == GasPurpose.bottom
+                                          ? "BOTTOM"
+                                          : "DECO",
+                                    )
+                                    .color(Colors.white)
+                                    .size(10)
+                                    .weight(FontWeight.bold),
+                          ),
+                          Text(
+                                '${cylinder.name}\nVolume : ${cylinder.totalLiters} L\nRemain : ${remain.toStringAsFixed(1)} L\n${remainingPressure}bar',
+                              )
+                              .color(colorMain)
+                              .align(TextAlign.left)
+                              .marginOnly(top: 5),
+                        ],
+                      ).marginOnly(left: 10),
                     ],
                   ).marginOnly(right: 50),
                   IconButton(
@@ -498,17 +632,13 @@ class _PagePlannerState extends State<PagePlanner> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 상단 요약 카드
         _buildSummaryCard(),
         const SizedBox(height: 20),
-
         Text('Dive Profile')
             .weight(FontWeight.bold)
             .color(colorMain)
             .size(18)
             .marginOnly(bottom: 15),
-
-        // 타임라인 리스트
         Container(
           decoration: BoxDecoration(
             border: Border(
@@ -559,21 +689,20 @@ class _PagePlannerState extends State<PagePlanner> {
     Color stepColor = colorMain;
     String phaseName = profile.phase;
 
-    // 페이즈별 아이콘 및 색상 분기
     switch (profile.phase) {
       case 'Descent':
         stepIcon = Icons.south_east;
         stepColor = Colors.blue;
         break;
-      case 'Bottom':
+      case 'Level Stay':
         stepIcon = Icons.anchor;
-        stepColor = Colors.indigoAccent; // 커스텀 컬러 혹은 Colors.indigo
+        stepColor = Colors.indigoAccent;
         break;
       case 'Ascent':
         stepIcon = Icons.north_east;
         stepColor = Colors.lightBlue;
         break;
-      case 'Deco':
+      case 'Deco Stop':
         stepIcon = Icons.timer_outlined;
         stepColor = Colors.orange;
         break;
@@ -581,11 +710,14 @@ class _PagePlannerState extends State<PagePlanner> {
         stepIcon = Icons.published_with_changes;
         stepColor = Colors.purple;
         break;
+      case 'Surface':
+        stepIcon = Icons.waves;
+        stepColor = Colors.teal;
+        break;
     }
 
     return Stack(
       children: [
-        // 타임라인 왼쪽 점
         Positioned(
           left: -6,
           top: 20,
@@ -605,7 +737,6 @@ class _PagePlannerState extends State<PagePlanner> {
           ),
           child: Row(
             children: [
-              // 왼쪽: 아이콘 및 페이즈 명
               Column(
                 children: [
                   Icon(stepIcon, color: stepColor, size: 28),
@@ -614,8 +745,6 @@ class _PagePlannerState extends State<PagePlanner> {
                   ).size(10).color(stepColor).weight(FontWeight.bold),
                 ],
               ).marginOnly(right: 15),
-
-              // 중앙: 수심 및 시간 정보
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -627,7 +756,7 @@ class _PagePlannerState extends State<PagePlanner> {
                         ).size(20).weight(FontWeight.bold).color(colorMain),
                         const SizedBox(width: 10),
                         Text(
-                          '${profile.time.toStringAsFixed(1)} min',
+                          '${profile.time} min',
                         ).size(14).color(Colors.grey[700]!),
                       ],
                     ),
@@ -640,8 +769,6 @@ class _PagePlannerState extends State<PagePlanner> {
                   ],
                 ),
               ),
-
-              // 오른쪽: 사용 기체 태그
               Container(
                 padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
@@ -659,7 +786,6 @@ class _PagePlannerState extends State<PagePlanner> {
     );
   }
 
-  // 요약 카드 (총 시간 등)
   Widget _buildSummaryCard() {
     bool isFeasible = _planResult!.isFeasible;
     List<String> warnings = _planResult!.warnings;
@@ -668,7 +794,6 @@ class _PagePlannerState extends State<PagePlanner> {
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        // 계획 가능 여부에 따라 배경색 변경
         color: isFeasible
             ? Colors.green.withAlpha(25)
             : Colors.red.withAlpha(25),
@@ -685,14 +810,11 @@ class _PagePlannerState extends State<PagePlanner> {
         children: [
           Row(
             children: [
-              // 상태 아이콘
               Icon(
                 isFeasible ? Icons.check_circle : Icons.dangerous,
                 color: isFeasible ? Colors.green : Colors.red,
                 size: 40,
               ).marginOnly(right: 15),
-
-              // 핵심 정보 (상태 및 총 시간)
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -715,44 +837,40 @@ class _PagePlannerState extends State<PagePlanner> {
               ),
             ],
           ),
-
-          // 경고 메시지가 있을 경우 표시되는 영역
           if (warnings.isNotEmpty) ...[
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 10),
               child: Divider(height: 1, thickness: 1, color: Colors.black12),
             ),
-            ...warnings
-                .map(
-                  (msg) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 3),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                          msg.contains('CRITICAL')
-                              ? Icons.report
-                              : Icons.warning_amber_rounded,
-                          size: 18,
-                          color: msg.contains('CRITICAL')
-                              ? Colors.red
-                              : Colors.orange[800],
-                        ).marginOnly(right: 8, top: 2),
-                        Expanded(
-                          child: Text(msg)
-                              .size(13)
-                              .color(
-                                msg.contains('CRITICAL')
-                                    ? Colors.red[900]!
-                                    : Colors.orange[900]!,
-                              )
-                              .weight(FontWeight.w500),
-                        ),
-                      ],
+            ...warnings.map(
+              (msg) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      msg.contains('CRITICAL')
+                          ? Icons.report
+                          : Icons.warning_amber_rounded,
+                      size: 18,
+                      color: msg.contains('CRITICAL')
+                          ? Colors.red
+                          : Colors.orange[800],
+                    ).marginOnly(right: 8, top: 2),
+                    Expanded(
+                      child: Text(msg)
+                          .size(13)
+                          .color(
+                            msg.contains('CRITICAL')
+                                ? Colors.red[900]!
+                                : Colors.orange[900]!,
+                          )
+                          .weight(FontWeight.w500),
                     ),
-                  ),
-                )
-                .toList(),
+                  ],
+                ),
+              ),
+            ),
           ],
         ],
       ),
@@ -760,12 +878,8 @@ class _PagePlannerState extends State<PagePlanner> {
   }
 
   void _startDivePlan() {
-    if (textIsEmpty(_textControllerTargetDepth.text)) {
-      showSnackbar('Error', 'Please enter target depth');
-      return;
-    }
-    if (textIsEmpty(_textControllerBottomTime.text)) {
-      showSnackbar('Error', 'Please enter bottom time');
+    if (waypoints.isEmpty) {
+      showSnackbar('Error', 'Please add at least one waypoint (Depth/Time).');
       return;
     }
     if (textIsEmpty(_textControllerRMV.text)) {
@@ -778,148 +892,23 @@ class _PagePlannerState extends State<PagePlanner> {
     }
 
     DivePlanInput input = DivePlanInput(
-      targetDepth: double.parse(_textControllerTargetDepth.text),
-      bottomTime: int.parse(_textControllerBottomTime.text),
-      rmv: double.parse(_textControllerRMV.text),
+      waypoints: waypoints,
+      rmv: double.tryParse(_textControllerRMV.text) ?? 20.0,
       cylinders: cylinders,
     );
 
-    // APref 값 가져올 때 발생할 수 있는 오류 방어 처리
     double gfHighVal = 0.85;
     double gfLowVal = 0.30;
     try {
-      gfHighVal = APref.getData(AprefKey.GF_HIGH) ?? 0.85;
-      gfLowVal = APref.getData(AprefKey.GF_LOW) ?? 0.30;
-    } catch (_) {}
+      gfHighVal = (APref.getData(AprefKey.GF_HIGH) as num?)?.toDouble() ?? 0.85;
+      gfLowVal = (APref.getData(AprefKey.GF_LOW) as num?)?.toDouble() ?? 0.30;
+    } catch (e) {
+      print("GF Value Error: $e");
+    }
 
     DivePlanner2 planner = DivePlanner2(gfHigh: gfHighVal, gfLow: gfLowVal);
-    _planResult = planner.generatePlan(input);
-    showPlanDetailDialog(_planResult!, input);
-    setState(() {});
-  }
-
-  void showPlanDetailDialog(DivePlanResult result, DivePlanInput input) {
-    // 1. 가스 소모 내역 문자열 생성
-    String gasSummary = result.gasConsumption.entries
-        .map((e) {
-          int remain = result.remainingPressure[e.key] ?? 0;
-          return "• ${e.key.name}: ${e.value.toInt()}L 소모 (잔압: ${remain} bar)";
-        })
-        .join("\n");
-
-    // 2. 경고 사항 문자열 생성
-    String warnings = result.warnings.isEmpty
-        ? "✅ 안전 주의사항 없음"
-        : "⚠️ 경고:\n${result.warnings.map((w) => "- $w").join("\n")}";
-
-    // 3. 주요 감압 정보 추출
-    int firstStop = result.profile
-        .firstWhere(
-          (s) => s.phase == "Deco Stop",
-          orElse: () => DiveStep("", 0, 0, input.cylinders.first, 0),
-        )
-        .depth;
-
-    double gfHighVal = 0.85;
-    double gfLowVal = 0.30;
-    try {
-      gfHighVal = APref.getData(AprefKey.GF_HIGH) ?? 0.85;
-      gfLowVal = APref.getData(AprefKey.GF_LOW) ?? 0.30;
-    } catch (_) {}
-
-    Get.defaultDialog(
-      contentPadding: EdgeInsets.all(20),
-      title: "Dive Plan Summary",
-      titleStyle: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-      content: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // --- 기본 정보 ---
-          _buildSectionTitle("📊 기본 다이빙 정보"),
-          _buildInfoRow("목표 수심", "${input.targetDepth}m"),
-          _buildInfoRow("바닥 체류", "${input.bottomTime}분"),
-          _buildInfoRow("총 다이빙 시간", "${result.totalDiveTime.toInt()}분"),
-          _buildInfoRow("알고리즘", "Buhlmann ZHL-16C"),
-          _buildInfoRow(
-            "GF 설정",
-            "${(gfLowVal * 100).toInt()}/${(gfHighVal * 100).toInt()}",
-          ),
-
-          Divider(),
-
-          // --- 감압 정보 ---
-          _buildSectionTitle("⚓ 감압/상승 정보"),
-          _buildInfoRow(
-            "첫 정지 수심",
-            firstStop > 0 ? "${firstStop}m" : "무감압(NDL)",
-          ),
-          _buildInfoRow("최종 정지 수심", "3m"),
-          _buildInfoRow("상승 속도", "10m/min"),
-
-          Divider(),
-
-          // --- 가스 정보 ---
-          _buildSectionTitle("⛽ 가스 소모 및 잔압"),
-          Text(gasSummary, style: TextStyle(fontSize: 13)),
-
-          SizedBox(height: 10),
-
-          // --- 경고창 (있을 경우에만 강조) ---
-          Container(
-            padding: EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: result.isFeasible
-                  ? Colors.blue.withOpacity(0.1)
-                  : Colors.red.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              warnings,
-              style: TextStyle(
-                fontSize: 12,
-                color: result.isFeasible ? Colors.blue[800] : Colors.red[800],
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-      confirm: TextButton(
-        onPressed: () => Get.back(),
-        child: Text("확인", style: TextStyle(fontWeight: FontWeight.bold)),
-      ),
-    );
-  }
-
-  // 헬퍼 위젯: 섹션 타이틀
-  Widget _buildSectionTitle(String title) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.bold,
-          color: Colors.blueGrey,
-        ),
-      ),
-    );
-  }
-
-  // 헬퍼 위젯: 데이터 행
-  Widget _buildInfoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: TextStyle(fontSize: 13, color: Colors.black54)),
-          Text(
-            value,
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-          ),
-        ],
-      ),
-    );
+    setState(() {
+      _planResult = planner.generatePlan(input);
+    });
   }
 }

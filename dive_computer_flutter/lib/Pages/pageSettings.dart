@@ -29,12 +29,16 @@ class _PageSettingsState extends State<PageSettings> {
   var gfHighNotifier = ValueNotifier<double>(85);
   var gfLowNotifier = ValueNotifier<double>(40);
 
-  double ppo2 = 1.4;
-  double get mod => (((ppo2 / 0.21) * 10) - 10);
+  double ppo2Bottom = 1.4;
+  double get modBottom => (((ppo2Bottom / 0.21) * 10) - 10);
+
+  double ppo2Deco = 1.6;
+  double get modDeco => (((ppo2Deco / 0.21) * 10) - 10);
 
   @override
   void initState() {
-    ppo2 = APref.getData(AprefKey.PPO2);
+    ppo2Bottom = APref.getData(AprefKey.PPO2_BOTTOM);
+    ppo2Deco = APref.getData(AprefKey.PPO2_DECO);
     gfHighNotifier.value = APref.getData(AprefKey.GF_HIGH) * 100;
     gfLowNotifier.value = APref.getData(AprefKey.GF_LOW) * 100;
     _currentView = _settingDiving;
@@ -303,20 +307,43 @@ class _PageSettingsState extends State<PageSettings> {
           mainAxisAlignment: MainAxisAlignment.start,
           children: [
             SizedBox(
-              width: 50,
-              child: Text('PPO2').color(colorMain).weight(FontWeight.bold),
+              width: 130,
+              child: Text(
+                'PPO2 BOTTOM',
+              ).color(colorMain).weight(FontWeight.bold),
             ).marginOnly(right: 20),
             Button(
-              child: Text('$ppo2').color(Colors.white),
+              child: Text('$ppo2Bottom').color(Colors.white),
               onPressed: () {
                 setState(() {
-                  ppo2 = ppo2 == 1.4 ? 1.6 : 1.4;
-                  APref.setData(AprefKey.PPO2, ppo2);
+                  ppo2Bottom = ppo2Bottom == 1.4 ? 1.6 : 1.4;
+                  APref.setData(AprefKey.PPO2_BOTTOM, ppo2Bottom);
                 });
               },
             ).marginOnly(right: 40),
             Text(
-              'MOD : ${mod.floor().toStringAsFixed(1)}m',
+              'MOD : ${modBottom.floor().toStringAsFixed(1)}m',
+            ).color(colorMain).weight(FontWeight.bold),
+          ],
+        ).marginOnly(bottom: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 130,
+              child: Text('PPO2 DECO').color(colorMain).weight(FontWeight.bold),
+            ).marginOnly(right: 20),
+            Button(
+              child: Text('$ppo2Deco').color(Colors.white),
+              onPressed: () {
+                setState(() {
+                  ppo2Deco = ppo2Deco == 1.4 ? 1.6 : 1.4;
+                  APref.setData(AprefKey.PPO2_DECO, ppo2Deco);
+                });
+              },
+            ).marginOnly(right: 40),
+            Text(
+              'MOD : ${modDeco.floor().toStringAsFixed(1)}m',
             ).color(colorMain).weight(FontWeight.bold),
           ],
         ),

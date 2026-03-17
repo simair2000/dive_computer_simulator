@@ -9,7 +9,8 @@ enum AprefKey {
   DescentSpeed(18),
   GF_HIGH(0.85),
   GF_LOW(0.4),
-  PPO2(1.4);
+  PPO2_BOTTOM(1.4),
+  PPO2_DECO(1.6);
 
   final dynamic defValue;
   const AprefKey(this.defValue);

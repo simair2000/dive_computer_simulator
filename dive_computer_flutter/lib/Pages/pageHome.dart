@@ -263,7 +263,9 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.start,
                         children: [
-                          Text('PPO2 : ${APref.getData(AprefKey.PPO2)}')
+                          Text(
+                                'PPO2 Bottom: ${APref.getData(AprefKey.PPO2_BOTTOM)}',
+                              )
                               .color(colorMain)
                               .weight(FontWeight.bold)
                               .marginOnly(right: 20),
