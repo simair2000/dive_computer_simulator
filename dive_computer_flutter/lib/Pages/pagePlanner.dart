@@ -727,59 +727,62 @@ class _PagePlannerState extends State<PagePlanner> {
             decoration: BoxDecoration(color: stepColor, shape: BoxShape.circle),
           ),
         ),
-        Container(
-          margin: EdgeInsets.only(left: 20, bottom: 10),
-          padding: EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: stepColor.withAlpha(15),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: stepColor.withAlpha(50)),
-          ),
-          child: Row(
-            children: [
-              Column(
-                children: [
-                  Icon(stepIcon, color: stepColor, size: 28),
-                  Text(
-                    phaseName,
-                  ).size(10).color(stepColor).weight(FontWeight.bold),
-                ],
-              ).marginOnly(right: 15),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        GestureDetector(
+          onTap: () => _showStepDetails(profile),
+          child: Container(
+            margin: EdgeInsets.only(left: 20, bottom: 10),
+            padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: stepColor.withAlpha(15),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: stepColor.withAlpha(50)),
+            ),
+            child: Row(
+              children: [
+                Column(
                   children: [
-                    Row(
-                      children: [
-                        Text(
-                          '${profile.depth}m',
-                        ).size(20).weight(FontWeight.bold).color(colorMain),
-                        const SizedBox(width: 10),
-                        Text(
-                          '${profile.time} min',
-                        ).size(14).color(Colors.grey[700]!),
-                      ],
-                    ),
-                    if (profile.phase == "Gas Switch")
-                      Text(
-                        'Switch to ${profile.gasUsed.name}',
-                      ).color(Colors.purple).weight(FontWeight.bold).size(12)
-                    else
-                      Text('Runtime step').size(11).color(Colors.grey),
+                    Icon(stepIcon, color: stepColor, size: 28),
+                    Text(
+                      phaseName,
+                    ).size(10).color(stepColor).weight(FontWeight.bold),
                   ],
+                ).marginOnly(right: 15),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            '${profile.depth}m',
+                          ).size(20).weight(FontWeight.bold).color(colorMain),
+                          const SizedBox(width: 10),
+                          Text(
+                            '${profile.time} min',
+                          ).size(14).color(Colors.grey[700]!),
+                        ],
+                      ),
+                      if (profile.phase == "Gas Switch")
+                        Text(
+                          'Switch to ${profile.gasUsed.name}',
+                        ).color(Colors.purple).weight(FontWeight.bold).size(12)
+                      else
+                        Text('Runtime step').size(11).color(Colors.grey),
+                    ],
+                  ),
                 ),
-              ),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: colorMain,
-                  borderRadius: BorderRadius.circular(20),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: colorMain,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    profile.gasUsed.name,
+                  ).color(Colors.white).size(11).weight(FontWeight.bold),
                 ),
-                child: Text(
-                  profile.gasUsed.name,
-                ).color(Colors.white).size(11).weight(FontWeight.bold),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ],
@@ -910,5 +913,90 @@ class _PagePlannerState extends State<PagePlanner> {
     setState(() {
       _planResult = planner.generatePlan(input);
     });
+  }
+
+  // --- 프로필 카드 클릭 시 뜨는 상세 정보 팝업 ---
+  void _showStepDetails(DiveStep step) {
+    Get.defaultDialog(
+      title: "Step End Details",
+      titleStyle: TextStyle(
+        fontWeight: FontWeight.bold,
+        fontSize: 18,
+        color: colorMain,
+      ),
+      contentPadding: EdgeInsets.all(20),
+      content: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildDetailRow(Icons.label, "Phase", step.phase),
+          _buildDetailRow(Icons.height, "Depth", "${step.depth} m"),
+          _buildDetailRow(Icons.timer, "Time Spent", "${step.time} min"),
+          _buildDetailRow(Icons.air, "Gas Used", step.gasUsed.name),
+          Divider(height: 20, thickness: 1),
+          _buildDetailRow(
+            Icons.speed,
+            "NDL (Remaining)",
+            step.ndl <= 0
+                ? "DECO"
+                : (step.ndl >= 99 ? "99+ min" : "${step.ndl.toInt()} min"),
+            color: step.ndl <= 0 ? Colors.red : Colors.green,
+          ),
+          _buildDetailRow(
+            Icons.science,
+            "PO2",
+            "${step.pO2.toStringAsFixed(2)} bar",
+            color: step.pO2 >= 1.4 ? Colors.orange : colorMain,
+          ),
+          _buildDetailRow(
+            Icons.warning,
+            "CNS Limit",
+            "${step.cns.toStringAsFixed(1)} %",
+            color: step.cns >= 80 ? Colors.red : colorMain,
+          ),
+        ],
+      ),
+      confirm: TextButton(
+        onPressed: () => Get.back(),
+        child: Text(
+          "Close",
+          style: TextStyle(fontWeight: FontWeight.bold, color: colorMain),
+        ),
+      ),
+    );
+  }
+
+  // 다이얼로그 내부 요소 헬퍼
+  Widget _buildDetailRow(
+    IconData icon,
+    String label,
+    String value, {
+    Color? color,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6.0),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: color ?? Colors.black54),
+          SizedBox(width: 10),
+          Text(
+            "$label : ",
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Colors.black87,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: color ?? Colors.black87,
+              ),
+              textAlign: TextAlign.right,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

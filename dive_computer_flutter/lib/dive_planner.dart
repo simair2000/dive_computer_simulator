@@ -32,10 +32,16 @@ class Cylinder {
 
   // 감압용 최대운영수심 (PO2 1.6 기준)
   double get decoMod =>
-      ((APref.getData(AprefKey.PPO2_DECO) / fractionO2) * 10) - 10;
+      (((APref.getData(AprefKey.PPO2_DECO) as num?)?.toDouble() ??
+              1.6 / fractionO2) *
+          10) -
+      10;
   // 바닥 체류용 최대운영수심 (PO2 1.4 기준)
   double get bottomMod =>
-      ((APref.getData(AprefKey.PPO2_BOTTOM) / fractionO2) * 10) - 10;
+      (((APref.getData(AprefKey.PPO2_BOTTOM) as num?)?.toDouble() ??
+              1.4 / fractionO2) *
+          10) -
+      10;
   // 전체 가스 보유량(리터)
   double get totalLiters => volume * count * startPressure;
 }
@@ -68,14 +74,20 @@ class DiveStep {
   final int time;
   final Cylinder gasUsed;
   final double gasConsumedLiters;
+  final double pO2;
+  final double cns;
+  final double ndl;
 
   DiveStep(
     this.phase,
     this.depth,
     this.time,
     this.gasUsed,
-    this.gasConsumedLiters,
-  );
+    this.gasConsumedLiters, {
+    this.pO2 = 0.0,
+    this.cns = 0.0,
+    this.ndl = 99.0,
+  });
 }
 
 /// 플래너 결과 데이터 모델
@@ -100,6 +112,7 @@ class DivePlanResult {
 class DivePlanner2 {
   final double gfLow;
   final double gfHigh;
+  Buhlmann _buhlmann = Buhlmann();
 
   // final double ascentRate = 10.0;
   // final double descentRate = 20.0;
@@ -115,9 +128,8 @@ class DivePlanner2 {
       for (var c in input.cylinders) c: 0.0,
     };
 
-    if (input.waypoints.isEmpty) {
+    if (input.waypoints.isEmpty)
       return _failResult(["ERROR: No dive waypoints provided."]);
-    }
 
     double surfacePressure = 1.013;
     double vaporPressure = 0.0627;
@@ -127,15 +139,14 @@ class DivePlanner2 {
 
     double currentDepth = 0.0;
     double totalElapsed = 0.0;
+    double currentCns = 0.0; // CNS 누적 변수 추가
     Cylinder? currentGas;
 
     double maxDiveDepth = input.waypoints.map((e) => e.depth).reduce(max);
 
-    // 2. 멀티레벨 웨이포인트(Waypoints) 순회
     for (int w = 0; w < input.waypoints.length; w++) {
       var wp = input.waypoints[w];
 
-      // 하강 전 기체 체크 (currentGas 파라미터 추가)
       Cylinder? bestGas = _getBestGasAtDepth(
         input.cylinders,
         wp.depth,
@@ -143,21 +154,36 @@ class DivePlanner2 {
         currentGas,
         isDecoPhase: false,
       );
-
-      if (bestGas == null) {
+      if (bestGas == null)
         return _failResult(["ERROR: No suitable gas for depth ${wp.depth}m."]);
-      }
 
       if (currentGas != bestGas) {
         currentGas = bestGas;
         if (currentDepth > 0) {
+          double switchPO2 =
+              (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
+          double switchNdl = _calculateNDL(
+            simN2,
+            simHe,
+            currentDepth,
+            currentGas!,
+          );
           profile.add(
-            DiveStep("Gas Switch", currentDepth.toInt(), 0, currentGas, 0.0),
+            DiveStep(
+              "Gas Switch",
+              currentDepth.toInt(),
+              0,
+              currentGas!,
+              0.0,
+              pO2: switchPO2,
+              cns: currentCns,
+              ndl: switchNdl,
+            ),
           );
         }
       }
 
-      // 2-1. 이동 (Descent or Ascent to next level)
+      // 이동 (Descent or Ascent)
       double travelDist = (wp.depth - currentDepth).abs();
       if (travelDist > 0) {
         double speed = wp.depth > currentDepth
@@ -178,29 +204,39 @@ class DivePlanner2 {
         double avgTravelDepth = (currentDepth + wp.depth) / 2.0;
         double travelGasUsed =
             travelTime * input.rmv * (1.0 + avgTravelDepth / 10.0);
-        gasConsumption[currentGas] =
+        gasConsumption[currentGas!] =
             gasConsumption[currentGas]! + travelGasUsed;
+
+        // CNS, PO2, NDL 계산 추가
+        double avgPO2 = (1.0 + avgTravelDepth / 10.0) * currentGas!.fractionO2;
+        currentCns += _getCnsRatePerMinute(avgPO2) * travelTime;
+        double endPO2 = (1.0 + wp.depth / 10.0) * currentGas!.fractionO2;
+        double currentNdl = _calculateNDL(simN2, simHe, wp.depth, currentGas!);
 
         profile.add(
           DiveStep(
             wp.depth > currentDepth ? "Descent" : "Ascent",
             wp.depth.toInt(),
             travelTime.ceil(),
-            currentGas,
+            currentGas!,
             travelGasUsed,
+            pO2: endPO2,
+            cns: currentCns,
+            ndl: currentNdl, // 세부 데이터 주입
           ),
         );
         totalElapsed += travelTime;
         currentDepth = wp.depth;
       }
 
-      // 2-2. 체류 (Level Stay) - 1분 단위 처리
+      // 체류 (Level Stay)
       if (wp.time > 0) {
         int phaseTime = 0;
         double phaseGasUsed = 0.0;
+        double lastPO2 = (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
+        double lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas!);
 
         for (int m = 0; m < wp.time; m++) {
-          // currentGas 파라미터 추가
           Cylinder? bestStayGas = _getBestGasAtDepth(
             input.cylinders,
             currentDepth,
@@ -210,7 +246,7 @@ class DivePlanner2 {
           );
 
           if (bestStayGas != null && bestStayGas != currentGas) {
-            if (phaseTime > 0) {
+            if (phaseTime > 0)
               profile.add(
                 DiveStep(
                   "Level Stay",
@@ -218,12 +254,25 @@ class DivePlanner2 {
                   phaseTime,
                   currentGas!,
                   phaseGasUsed,
+                  pO2: lastPO2,
+                  cns: currentCns,
+                  ndl: lastNdl,
                 ),
               );
-            }
             currentGas = bestStayGas;
+            lastPO2 = (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
+            lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas!);
             profile.add(
-              DiveStep("Gas Switch", currentDepth.toInt(), 0, currentGas, 0.0),
+              DiveStep(
+                "Gas Switch",
+                currentDepth.toInt(),
+                0,
+                currentGas!,
+                0.0,
+                pO2: lastPO2,
+                cns: currentCns,
+                ndl: lastNdl,
+              ),
             );
             phaseTime = 0;
             phaseGasUsed = 0.0;
@@ -238,14 +287,19 @@ class DivePlanner2 {
             currentGas!,
           );
           double minGasUsed = input.rmv * (1.0 + currentDepth / 10.0);
-          gasConsumption[currentGas] = gasConsumption[currentGas]! + minGasUsed;
+          gasConsumption[currentGas!] =
+              gasConsumption[currentGas]! + minGasUsed;
+
+          lastPO2 = (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
+          currentCns += _getCnsRatePerMinute(lastPO2) * 1.0;
+          lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas!);
 
           phaseTime++;
           phaseGasUsed += minGasUsed;
           totalElapsed += 1.0;
         }
 
-        if (phaseTime > 0) {
+        if (phaseTime > 0)
           profile.add(
             DiveStep(
               "Level Stay",
@@ -253,13 +307,15 @@ class DivePlanner2 {
               phaseTime,
               currentGas!,
               phaseGasUsed,
+              pO2: lastPO2,
+              cns: currentCns,
+              ndl: lastNdl,
             ),
           );
-        }
       }
     }
 
-    // 3. 최종 상승 및 감압 (Ascent & Deco)
+    // 최종 상승 및 감압
     while (currentDepth > 0) {
       double nextStop = (currentDepth / 3).floor() * 3.0;
       if (nextStop == currentDepth) nextStop -= 3.0;
@@ -269,7 +325,6 @@ class DivePlanner2 {
       double ceiling = _calcCeiling(simN2, simHe, currentGF);
 
       if (ceiling <= nextStop) {
-        // 상승 가능
         double travelTime =
             (currentDepth - nextStop) /
             ((APref.getData(AprefKey.AscentSpeed) as num?)?.toDouble() ?? 9.0);
@@ -284,7 +339,12 @@ class DivePlanner2 {
 
         double avgDepth = (currentDepth + nextStop) / 2.0;
         double travelGas = travelTime * input.rmv * (1.0 + avgDepth / 10.0);
-        gasConsumption[currentGas] = gasConsumption[currentGas]! + travelGas;
+        gasConsumption[currentGas!] = gasConsumption[currentGas]! + travelGas;
+
+        double avgPO2 = (1.0 + avgDepth / 10.0) * currentGas!.fractionO2;
+        currentCns += _getCnsRatePerMinute(avgPO2) * travelTime;
+        double endPO2 = (1.0 + nextStop / 10.0) * currentGas!.fractionO2;
+        double currentNdl = _calculateNDL(simN2, simHe, nextStop, currentGas!);
 
         currentDepth = nextStop;
         totalElapsed += travelTime;
@@ -295,18 +355,29 @@ class DivePlanner2 {
               "Ascent",
               currentDepth.toInt(),
               travelTime.ceil(),
-              currentGas,
+              currentGas!,
               travelGas,
+              pO2: endPO2,
+              cns: currentCns,
+              ndl: currentNdl,
             ),
           );
         } else {
           profile.add(
-            DiveStep("Surface", 0, travelTime.ceil(), currentGas, travelGas),
+            DiveStep(
+              "Surface",
+              0,
+              travelTime.ceil(),
+              currentGas!,
+              travelGas,
+              pO2: endPO2,
+              cns: currentCns,
+              ndl: currentNdl,
+            ),
           );
           break;
         }
       } else {
-        // 감압 정지 (Deco Stop) - currentGas 파라미터 추가
         Cylinder? decoGas = _getBestGasAtDepth(
           input.cylinders,
           currentDepth,
@@ -316,8 +387,25 @@ class DivePlanner2 {
         );
         if (decoGas != null && decoGas != currentGas) {
           currentGas = decoGas;
+          double switchPO2 =
+              (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
+          double switchNdl = _calculateNDL(
+            simN2,
+            simHe,
+            currentDepth,
+            currentGas!,
+          );
           profile.add(
-            DiveStep("Gas Switch", currentDepth.toInt(), 0, currentGas, 0),
+            DiveStep(
+              "Gas Switch",
+              currentDepth.toInt(),
+              0,
+              currentGas!,
+              0,
+              pO2: switchPO2,
+              cns: currentCns,
+              ndl: switchNdl,
+            ),
           );
         }
 
@@ -330,10 +418,21 @@ class DivePlanner2 {
           currentGas!,
         );
         double stopGas = input.rmv * (1.0 + currentDepth / 10.0);
-        gasConsumption[currentGas] = gasConsumption[currentGas]! + stopGas;
+        gasConsumption[currentGas!] = gasConsumption[currentGas]! + stopGas;
 
-        if (profile.last.phase == "Deco Stop" &&
-            profile.last.depth == currentDepth.toInt()) {
+        double po2 = (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
+        currentCns += _getCnsRatePerMinute(po2) * 1.0;
+        double currentNdl = _calculateNDL(
+          simN2,
+          simHe,
+          currentDepth,
+          currentGas!,
+        );
+
+        if (profile.isNotEmpty &&
+            profile.last.phase == "Deco Stop" &&
+            profile.last.depth == currentDepth.toInt() &&
+            profile.last.gasUsed == currentGas) {
           var last = profile.removeLast();
           profile.add(
             DiveStep(
@@ -342,18 +441,29 @@ class DivePlanner2 {
               last.time + 1,
               last.gasUsed,
               last.gasConsumedLiters + stopGas,
+              pO2: po2,
+              cns: currentCns,
+              ndl: currentNdl,
             ),
           );
         } else {
           profile.add(
-            DiveStep("Deco Stop", currentDepth.toInt(), 1, currentGas, stopGas),
+            DiveStep(
+              "Deco Stop",
+              currentDepth.toInt(),
+              1,
+              currentGas!,
+              stopGas,
+              pO2: po2,
+              cns: currentCns,
+              ndl: currentNdl,
+            ),
           );
         }
         totalElapsed += 1.0;
       }
     }
 
-    // 4. 탱크 잔압 검사 및 경고
     Map<Cylinder, int> remainingPressure = {};
     for (var c in input.cylinders) {
       double usedBar = gasConsumption[c]! / (c.volume * c.count);
@@ -365,7 +475,7 @@ class DivePlanner2 {
           warnings.add("CRITICAL: Gas [${c.name}] completely depleted!");
         } else {
           warnings.add(
-            "WARNING: Low gas pressure in [${c.name}] ($remain bar).",
+            "WARNING: Low gas pressure in[${c.name}] ($remain bar).",
           );
         }
       }
@@ -544,5 +654,82 @@ class DivePlanner2 {
       remainingPressure: {},
       totalDiveTime: 0,
     );
+  }
+
+  // --- 새로 추가: 1분당 CNS 증가량 계산 (NOAA 테이블 기반) ---
+  double _getCnsRatePerMinute(double po2) {
+    if (po2 <= 0.5) return 0.0;
+    List<double> po2Table = [
+      0.5,
+      0.6,
+      0.7,
+      0.8,
+      0.9,
+      1.0,
+      1.1,
+      1.2,
+      1.3,
+      1.4,
+      1.5,
+      1.6,
+    ];
+    List<double> timeTable = [
+      999999,
+      720,
+      570,
+      450,
+      360,
+      300,
+      240,
+      210,
+      180,
+      150,
+      120,
+      45,
+    ];
+    double ratePerMinute = 0.0;
+
+    if (po2 >= 1.6) {
+      double r1 = 100.0 / 120.0;
+      double r2 = 100.0 / 45.0;
+      double slope = (r2 - r1) / (1.6 - 1.5);
+      ratePerMinute = r2 + slope * (po2 - 1.6);
+    } else {
+      for (int i = 0; i < po2Table.length - 1; i++) {
+        if (po2 >= po2Table[i] && po2 <= po2Table[i + 1]) {
+          double r1 = po2Table[i] == 0.5 ? 0.0 : 100.0 / timeTable[i];
+          double r2 = 100.0 / timeTable[i + 1];
+          double slope = (r2 - r1) / (po2Table[i + 1] - po2Table[i]);
+          ratePerMinute = r1 + slope * (po2 - po2Table[i]);
+          break;
+        }
+      }
+    }
+    return ratePerMinute;
+  }
+
+  // --- 새로 추가: 특정 수심에서의 무감압 한계(NDL) 시뮬레이션 ---
+  double _calculateNDL(
+    List<double> currentN2,
+    List<double> currentHe,
+    double depth,
+    Cylinder gas,
+  ) {
+    if (depth < 1.2) return 999.0;
+    if (!_buhlmann.isDepthSafe(0.0, currentN2, currentHe, gfHigh))
+      return 0.0; // 이미 데코에 걸린 상태
+
+    List<double> simN2 = List.from(currentN2); // 원본 훼손 방지
+    List<double> simHe = List.from(currentHe);
+
+    int minutes = 0;
+    while (minutes < 99) {
+      _simulateGasExchange(simN2, simHe, depth, depth, 1.0, gas);
+      minutes++;
+      if (!_buhlmann.isDepthSafe(0.0, simN2, simHe, gfHigh)) {
+        return minutes.toDouble();
+      }
+    }
+    return 99.0; // 99분 이상
   }
 }
