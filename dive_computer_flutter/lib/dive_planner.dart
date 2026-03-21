@@ -70,7 +70,7 @@ class DivePlanInput {
 class DiveStep {
   final String phase;
   final int depth;
-  final int time;
+  final double time;
   final Cylinder gasUsed;
   final double gasConsumedLiters;
   final double pO2;
@@ -227,7 +227,7 @@ class DivePlanner2 {
           DiveStep(
             wp.depth > currentDepth ? "Descent" : "Ascent",
             wp.depth.toInt(),
-            travelTime.ceil(),
+            travelTime,
             currentGas,
             travelGasUsed,
             pO2: endPO2,
@@ -242,7 +242,7 @@ class DivePlanner2 {
       }
 
       if (wp.time > 0) {
-        int phaseTime = 0;
+        double phaseTime = 0;
         double phaseGasUsed = 0.0;
         double lastPO2 = (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
         double lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas);
@@ -378,7 +378,7 @@ class DivePlanner2 {
             DiveStep(
               "Ascent",
               currentDepth.toInt(),
-              travelTime.ceil(),
+              travelTime,
               currentGas,
               travelGas,
               pO2: endPO2,
@@ -393,7 +393,7 @@ class DivePlanner2 {
             DiveStep(
               "Surface",
               0,
-              travelTime.ceil(),
+              travelTime,
               currentGas,
               travelGas,
               pO2: endPO2,

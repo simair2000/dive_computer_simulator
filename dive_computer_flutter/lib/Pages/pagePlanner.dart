@@ -47,7 +47,7 @@ class _PagePlannerState extends State<PagePlanner> {
 
   final List<Cylinder> cylinders = [];
   DivePlanResult? _planResult;
-  int _cylinderPurpose = 0; // 0: Bottom, 1: Deco
+  int _cylinderPurpose = 0;
 
   @override
   void dispose() {
@@ -63,12 +63,405 @@ class _PagePlannerState extends State<PagePlanner> {
     super.dispose();
   }
 
+  void _applyPreset(String name, String o2, String he, int purpose) {
+    setState(() {
+      _textControllerCylinderName.text = name;
+      _textControllerCylinderO2.text = o2;
+      _textControllerCylinderHe.text = he;
+      _cylinderPurpose = purpose; // 0: Bottom, 1: Deco
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    // ==============================================================
+    // 1. 왼쪽 패널 (입력부) 위젯 리스트
+    // ==============================================================
+    List<Widget> leftPanelContents = [
+      Text(
+        'Dive Plan (Multi-Level)',
+      ).weight(FontWeight.bold).color(colorMain).marginOnly(bottom: 10),
+      Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: colorMain.withOpacity(0.3)),
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(child: Text('Depth (m)').color(colorMain).size(13)),
+                Expanded(
+                  child: Text('Stay Time (min)').color(colorMain).size(13),
+                ),
+                const SizedBox(width: 40),
+              ],
+            ).marginOnly(bottom: 5),
+            Row(
+              children: [
+                Expanded(
+                  child: InputText(
+                    controller: _textControllerWpDepth,
+                    textAlign: TextAlign.center,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+                    ],
+                    maxLines: 1,
+                  ).marginOnly(right: 10),
+                ),
+                Expanded(
+                  child: InputText(
+                    controller: _textControllerWpTime,
+                    textAlign: TextAlign.center,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    maxLines: 1,
+                  ).marginOnly(right: 10),
+                ),
+                IconButton(
+                  onPressed: _addWaypoint,
+                  icon: Icon(Icons.add_box, color: colorMain, size: 35),
+                  padding: EdgeInsets.zero,
+                ),
+              ],
+            ),
+            if (waypoints.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              const Divider(height: 1),
+              const SizedBox(height: 10),
+              // 드래그 앤 드롭 리스트
+              ReorderableListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                buildDefaultDragHandles: false,
+                itemCount: waypoints.length,
+                onReorder: (int oldIndex, int newIndex) {
+                  setState(() {
+                    if (oldIndex < newIndex) newIndex -= 1;
+                    final item = waypoints.removeAt(oldIndex);
+                    waypoints.insert(newIndex, item);
+                  });
+                },
+                itemBuilder: (context, index) {
+                  var wp = waypoints[index];
+                  return Container(
+                    key: ObjectKey(wp),
+                    padding: const EdgeInsets.symmetric(vertical: 6.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            ReorderableDragStartListener(
+                              index: index,
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.grab,
+                                child: Icon(
+                                  Icons.drag_indicator,
+                                  color: Colors.grey[400],
+                                  size: 22,
+                                ).marginOnly(right: 8),
+                              ),
+                            ),
+                            Text(
+                              '${index + 1}.',
+                            ).weight(FontWeight.bold).color(colorMain),
+                          ],
+                        ),
+                        Text('${wp.depth} m').color(Colors.black87),
+                        Text('${wp.time} min').color(Colors.black87),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.delete,
+                            color: Colors.redAccent,
+                            size: 20,
+                          ),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          onPressed: () {
+                            setState(() {
+                              waypoints.removeAt(index);
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
+          ],
+        ),
+      ),
+      const SizedBox(height: 15),
+      Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('RMV').weight(FontWeight.bold).color(colorMain),
+                Text('(Respiratory Minute Volume)').color(colorMain).size(11),
+              ],
+            ),
+          ),
+          Expanded(
+            child: InputText(
+              width: 100,
+              controller: _textControllerRMV,
+              textAlign: TextAlign.center,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+              ],
+              maxLines: 1,
+            ),
+          ),
+        ],
+      ),
+      horizontalLine(),
+      Text(
+        'Gas Cylinders',
+      ).weight(FontWeight.bold).color(colorMain).marginOnly(bottom: 10),
+      Row(
+        children: [
+          Expanded(
+            child: Button(
+              height: 35,
+              color: colorMain.withAlpha(200),
+              child: const Text('AIR').color(Colors.white).size(12),
+              onPressed: () => _applyPreset('Air', '21', '0', 0),
+            ).marginOnly(right: 5),
+          ),
+          Expanded(
+            child: Button(
+              height: 35,
+              color: colorMain.withAlpha(200),
+              child: const Text('EAN32').color(Colors.white).size(12),
+              onPressed: () => _applyPreset('EAN32', '32', '0', 0),
+            ).marginOnly(right: 5),
+          ),
+          Expanded(
+            child: Button(
+              height: 35,
+              color: colorMain.withAlpha(200),
+              child: const Text('EAN50').color(Colors.white).size(12),
+              onPressed: () =>
+                  _applyPreset('EAN50', '50', '0', 1), // EAN50은 주로 Deco용
+            ).marginOnly(right: 5),
+          ),
+          Expanded(
+            child: Button(
+              height: 35,
+              color: colorMain.withAlpha(200),
+              child: const Text('100% O2').color(Colors.white).size(11),
+              onPressed: () =>
+                  _applyPreset('100% O2', '100', '0', 1), // 100% O2는 Deco용
+            ),
+          ),
+        ],
+      ).marginOnly(bottom: 5),
+      Row(
+        children: [
+          Expanded(
+            child: Text('O2/He')
+                .weight(FontWeight.bold)
+                .color(colorMain)
+                .size(13)
+                .marginOnly(right: 5),
+          ),
+          Expanded(
+            child: Button(
+              height: 35,
+              color: colorMain.withAlpha(200),
+              child: const Text('21/35').color(Colors.white).size(12),
+              onPressed: () =>
+                  _applyPreset('21/35', '21', '35', 0), // 트라이믹스 Bottom
+            ).marginOnly(right: 5),
+          ),
+          Expanded(
+            child: Button(
+              height: 35,
+              color: colorMain.withAlpha(200),
+              child: const Text('18/45').color(Colors.white).size(12),
+              onPressed: () => _applyPreset('18/45', '18', '45', 0),
+            ).marginOnly(right: 5),
+          ),
+          Expanded(
+            child: Button(
+              height: 35,
+              color: colorMain.withAlpha(200),
+              child: const Text('15/55').color(Colors.white).size(12),
+              onPressed: () => _applyPreset('15/55', '15', '55', 0),
+            ),
+          ),
+        ],
+      ).marginOnly(bottom: 10),
+      Row(
+        children: [
+          Expanded(child: Text('Type').color(colorMain)),
+          Expanded(
+            child: Button(
+              height: 46,
+              child: Text(
+                _cylinderType == 1 ? 'Single' : 'Double',
+              ).color(Colors.white),
+              onPressed: () {
+                setState(() {
+                  _cylinderType = _cylinderType == 1 ? 2 : 1;
+                });
+              },
+            ),
+          ),
+        ],
+      ).marginOnly(bottom: 5),
+      Row(
+        children: [
+          Expanded(child: Text('Name').color(colorMain)),
+          Expanded(
+            child: InputText(
+              controller: _textControllerCylinderName,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+            ),
+          ),
+        ],
+      ).marginOnly(bottom: 5),
+      Row(
+        children: [
+          Expanded(child: Text('Volume (Liter)').color(colorMain)),
+          Expanded(
+            child: InputText(
+              controller: _textControllerCylinderVolume,
+              textAlign: TextAlign.center,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+              ],
+              maxLines: 1,
+            ),
+          ),
+        ],
+      ).marginOnly(bottom: 5),
+      Row(
+        children: [
+          Expanded(child: Text('Start Pressure (bar)').color(colorMain)),
+          Expanded(
+            child: InputText(
+              controller: _textControllerCylinderStartPressure,
+              textAlign: TextAlign.center,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+              ],
+              maxLines: 1,
+            ),
+          ),
+        ],
+      ).marginOnly(bottom: 5),
+      Row(
+        children: [
+          Expanded(child: Text('Purpose').color(colorMain)),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Button(
+                    height: 46,
+                    color: _cylinderPurpose == 0 ? colorMain : Colors.grey,
+                    child: Text('Bottom').color(Colors.white),
+                    onPressed: () => setState(() => _cylinderPurpose = 0),
+                  ).marginOnly(right: 5),
+                ),
+                Expanded(
+                  child: Button(
+                    height: 46,
+                    color: _cylinderPurpose == 1 ? Colors.orange : Colors.grey,
+                    child: Text('Deco').color(Colors.white),
+                    onPressed: () => setState(() => _cylinderPurpose = 1),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ).marginOnly(bottom: 5),
+      Row(
+        children: [
+          Expanded(child: Text('O2 %').color(colorMain)),
+          Expanded(
+            flex: 2,
+            child: InputText(
+              controller: _textControllerCylinderO2,
+              textAlign: TextAlign.center,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'^\d{0,3}$')),
+              ],
+              maxLines: 1,
+            ).marginOnly(right: 20),
+          ),
+          Expanded(child: Text('He %').color(colorMain)),
+          Expanded(
+            flex: 2,
+            child: InputText(
+              controller: _textControllerCylinderHe,
+              textAlign: TextAlign.center,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'^\d{0,2}$')),
+              ],
+              maxLines: 1,
+            ),
+          ),
+        ],
+      ).marginOnly(bottom: 10),
+
+      Align(
+        alignment: AlignmentGeometry.centerRight,
+        child: IconButton(
+          tooltip: 'Add Cylinder',
+          onPressed: () {
+            _addCylinder();
+          },
+          icon: Icon(Icons.add_circle, color: colorMain, size: 40),
+        ),
+      ),
+      horizontalLine(),
+    ];
+
+    // ==============================================================
+    // 2. 오른쪽 패널 (결과부) 위젯 리스트
+    // ==============================================================
+    List<Widget> rightPanelContents = [
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Text('Cylinder List')
+              .weight(FontWeight.bold)
+              .color(colorMain)
+              .marginOnly(bottom: 10)
+              .marginOnly(right: 20),
+          Button(
+            height: 50,
+            color: Colors.green,
+            child: Text('Plan').color(Colors.white),
+            onPressed: () {
+              _startDivePlan();
+            },
+          ),
+        ],
+      ),
+      _cylinderList(),
+      horizontalLine(),
+      _divePlanResult(),
+    ];
+
+    // ==============================================================
+    // 3. 메인 Scaffold 및 반응형 렌더링 (LayoutBuilder)
+    // ==============================================================
     return Scaffold(
       appBar: AppBar(
         title: Text('Diving Planner').color(Colors.white),
-        leading: Icon(Icons.assignment, color: Colors.white, size: 30),
+        leading: const Icon(Icons.assignment, color: Colors.white, size: 30),
         backgroundColor: colorMain,
         actions: [
           IconButton(
@@ -76,14 +469,14 @@ class _PagePlannerState extends State<PagePlanner> {
             onPressed: () {
               context.goNamed(RoutePage.home.name);
             },
-            icon: Icon(Icons.scuba_diving, color: Colors.white),
+            icon: const Icon(Icons.scuba_diving, color: Colors.white),
           ),
           IconButton(
             tooltip: 'Go to the settings',
             onPressed: () {
               context.pushNamed(RoutePage.settings.name);
             },
-            icon: Icon(Icons.settings, color: Colors.white),
+            icon: const Icon(Icons.settings, color: Colors.white),
           ),
           IconButton(
             tooltip: 'About Dive Planner',
@@ -99,470 +492,68 @@ class _PagePlannerState extends State<PagePlanner> {
                     '⚠️ Warning: This software is purely a simulation tool. Always verify your plans with primary dive computers and never dive beyond your training and personal limits.',
               );
             },
-            icon: Icon(Icons.help, color: Colors.white),
+            icon: const Icon(Icons.help, color: Colors.white),
           ),
         ],
       ),
-      body: Row(
-        children: [
-          // 왼쪽: 설정 및 입력 (Waypoints & Cylinders)
-          Expanded(
-            flex: 2,
-            child: Container(
-              color: colorMain.withAlpha(30),
-              padding: EdgeInsets.all(20),
-              child: ListView(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // 🌟 화면 너비가 850 이상이면 PC/태블릿 모드(가로), 그 이하면 모바일 모드(세로)
+          bool isWideScreen = constraints.maxWidth > 850;
+
+          if (isWideScreen) {
+            // ==========================================
+            // [PC / 태블릿] 가로 레이아웃 (Row)
+            // ==========================================
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: Container(
+                    color: colorMain.withAlpha(30),
+                    padding: const EdgeInsets.all(20),
+                    child: ListView(children: leftPanelContents),
+                  ),
+                ),
+                Expanded(
+                  flex: 3,
+                  child: Container(
+                    padding: const EdgeInsets.all(20),
+                    child: ListView(children: rightPanelContents),
+                  ),
+                ),
+              ],
+            );
+          } else {
+            // ==========================================
+            // [모바일] 세로 스크롤 레이아웃 (Column)
+            // ==========================================
+            return SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // --- Multi-Level Waypoints 입력부 ---
-                  Text('Dive Plan (Multi-Level)')
-                      .weight(FontWeight.bold)
-                      .color(colorMain)
-                      .marginOnly(bottom: 10),
                   Container(
-                    padding: EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withAlpha(100),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: colorMain.withOpacity(0.3)),
-                    ),
+                    color: colorMain.withAlpha(30),
+                    padding: const EdgeInsets.all(20),
+                    // Column 안에서 ListView 요소들을 렌더링
                     child: Column(
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                'Depth (m)',
-                              ).color(colorMain).size(13),
-                            ),
-                            Expanded(
-                              child: Text(
-                                'Stay Time (min)',
-                              ).color(colorMain).size(13),
-                            ),
-                            SizedBox(width: 40), // 버튼 여백
-                          ],
-                        ).marginOnly(bottom: 5),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: InputText(
-                                controller: _textControllerWpDepth,
-                                textAlign: TextAlign.center,
-                                inputFormatters: [
-                                  FilteringTextInputFormatter.allow(
-                                    RegExp(r'^\d*\.?\d*$'),
-                                  ),
-                                ],
-                                maxLines: 1,
-                              ).marginOnly(right: 10),
-                            ),
-                            Expanded(
-                              child: InputText(
-                                controller: _textControllerWpTime,
-                                textAlign: TextAlign.center,
-                                inputFormatters: [
-                                  FilteringTextInputFormatter.digitsOnly,
-                                ],
-                                maxLines: 1,
-                              ).marginOnly(right: 10),
-                            ),
-                            IconButton(
-                              onPressed: _addWaypoint,
-                              icon: Icon(
-                                Icons.add_box,
-                                color: colorMain,
-                                size: 35,
-                              ),
-                              padding: EdgeInsets.zero,
-                            ),
-                          ],
-                        ),
-                        if (waypoints.isNotEmpty) ...[
-                          const SizedBox(height: 10),
-                          const Divider(height: 1),
-                          const SizedBox(height: 10),
-                          ReorderableListView.builder(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            buildDefaultDragHandles: false, // 우측 기본 햄버거 아이콘 끄기
-                            itemCount: waypoints.length,
-                            onReorder: (int oldIndex, int newIndex) {
-                              setState(() {
-                                // 아이템을 아래로 이동할 때 인덱스 보정 (플러터 기본 규칙)
-                                if (oldIndex < newIndex) {
-                                  newIndex -= 1;
-                                }
-                                // 배열에서 뽑아서 새 위치에 삽입
-                                final item = waypoints.removeAt(oldIndex);
-                                waypoints.insert(newIndex, item);
-                              });
-                            },
-                            itemBuilder: (context, index) {
-                              var wp = waypoints[index];
-
-                              return Container(
-                                // 🌟 ReorderableListView의 자식은 반드시 고유한 Key가 필요합니다.
-                                key: ObjectKey(wp),
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 6.0,
-                                ),
-                                child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        // 🌟 드래그 손잡이(핸들) 영역
-                                        ReorderableDragStartListener(
-                                          index: index,
-                                          child: MouseRegion(
-                                            cursor: SystemMouseCursors
-                                                .grab, // 마우스 오버 시 손바닥 커서로 변경
-                                            child: Icon(
-                                              Icons.drag_indicator,
-                                              color: Colors.grey[400],
-                                              size: 22,
-                                            ).marginOnly(right: 8),
-                                          ),
-                                        ),
-                                        Text('${index + 1}.')
-                                            .weight(FontWeight.bold)
-                                            .color(colorMain),
-                                      ],
-                                    ),
-                                    Text('${wp.depth} m').color(Colors.black87),
-                                    Text(
-                                      '${wp.time} min',
-                                    ).color(Colors.black87),
-                                    IconButton(
-                                      icon: Icon(
-                                        Icons.delete,
-                                        color: Colors.redAccent,
-                                        size: 20,
-                                      ),
-                                      padding: EdgeInsets.zero,
-                                      constraints:
-                                          const BoxConstraints(), // 아이콘 버튼 여백 축소
-                                      onPressed: () {
-                                        setState(() {
-                                          waypoints.removeAt(index);
-                                        });
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      ],
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: leftPanelContents,
                     ),
                   ),
-                  const SizedBox(height: 15),
-
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'RMV',
-                            ).weight(FontWeight.bold).color(colorMain),
-                            Text(
-                              '(Respiratory Minute Volume)',
-                            ).color(colorMain).size(11),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: InputText(
-                          width: 100,
-                          controller: _textControllerRMV,
-                          textAlign: TextAlign.center,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'^\d*\.?\d*$'),
-                            ),
-                          ],
-                          maxLines: 1,
-                        ),
-                      ),
-                    ],
-                  ),
-                  horizontalLine(),
-
-                  // --- Cylinder 세부 입력부 ---
-                  Text('Gas Cylinders')
-                      .weight(FontWeight.bold)
-                      .color(colorMain)
-                      .marginOnly(bottom: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.start,
-                    children: [
-                      Button(
-                        child: Text('AIR').color(Colors.white),
-                        onPressed: () {
-                          setState(() {
-                            _textControllerCylinderName.text = 'AIR';
-                            _textControllerCylinderO2.text = '21';
-                            _textControllerCylinderHe.text = '0';
-                          });
-                        },
-                      ).marginOnly(right: 5),
-                      Button(
-                        child: Text('EAN32').color(Colors.white),
-                        onPressed: () {
-                          setState(() {
-                            _textControllerCylinderName.text = 'EAN32';
-                            _textControllerCylinderO2.text = '32';
-                            _textControllerCylinderHe.text = '0';
-                          });
-                        },
-                      ).marginOnly(right: 5),
-                      Button(
-                        child: Text('EAN50').color(Colors.white),
-                        onPressed: () {
-                          setState(() {
-                            _textControllerCylinderName.text = 'EAN50';
-                            _textControllerCylinderO2.text = '50';
-                            _textControllerCylinderHe.text = '0';
-                          });
-                        },
-                      ).marginOnly(right: 5),
-                      Button(
-                        child: Text('100% O2').color(Colors.white),
-                        onPressed: () {
-                          setState(() {
-                            _textControllerCylinderName.text = '100% O2';
-                            _textControllerCylinderO2.text = '100';
-                            _textControllerCylinderHe.text = '0';
-                          });
-                        },
-                      ),
-                    ],
-                  ).marginOnly(bottom: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.start,
-                    children: [
-                      Text('O2/He')
-                          .color(colorMain)
-                          .weight(FontWeight.bold)
-                          .marginOnly(right: 10),
-                      Button(
-                        child: Text('21/35').color(Colors.white),
-                        onPressed: () {
-                          setState(() {
-                            _textControllerCylinderName.text = '21/35';
-                            _textControllerCylinderO2.text = '21';
-                            _textControllerCylinderHe.text = '35';
-                          });
-                        },
-                      ).marginOnly(right: 5),
-                      Button(
-                        child: Text('18/45').color(Colors.white),
-                        onPressed: () {
-                          setState(() {
-                            _textControllerCylinderName.text = '18/45';
-                            _textControllerCylinderO2.text = '18';
-                            _textControllerCylinderHe.text = '45';
-                          });
-                        },
-                      ).marginOnly(right: 5),
-                      Button(
-                        child: Text('15/55').color(Colors.white),
-                        onPressed: () {
-                          setState(() {
-                            _textControllerCylinderName.text = '15/55';
-                            _textControllerCylinderO2.text = '15';
-                            _textControllerCylinderHe.text = '55';
-                          });
-                        },
-                      ),
-                    ],
-                  ).marginOnly(bottom: 10),
-                  Row(
-                    children: [
-                      Expanded(child: Text('Type').color(colorMain)),
-                      Expanded(
-                        child: Button(
-                          height: 46,
-                          child: Text(
-                            _cylinderType == 1 ? 'Single' : 'Double',
-                          ).color(Colors.white),
-                          onPressed: () {
-                            setState(() {
-                              _cylinderType = _cylinderType == 1 ? 2 : 1;
-                            });
-                          },
-                        ),
-                      ),
-                    ],
-                  ).marginOnly(bottom: 5),
-                  Row(
-                    children: [
-                      Expanded(child: Text('Name').color(colorMain)),
-                      Expanded(
-                        child: InputText(
-                          controller: _textControllerCylinderName,
-                          textAlign: TextAlign.center,
-                          maxLines: 1,
-                        ),
-                      ),
-                    ],
-                  ).marginOnly(bottom: 5),
-                  Row(
-                    children: [
-                      Expanded(child: Text('Volume (Liter)').color(colorMain)),
-                      Expanded(
-                        child: InputText(
-                          controller: _textControllerCylinderVolume,
-                          textAlign: TextAlign.center,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'^\d*\.?\d*$'),
-                            ),
-                          ],
-                          maxLines: 1,
-                        ),
-                      ),
-                    ],
-                  ).marginOnly(bottom: 5),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text('Start Pressure (bar)').color(colorMain),
-                      ),
-                      Expanded(
-                        child: InputText(
-                          controller: _textControllerCylinderStartPressure,
-                          textAlign: TextAlign.center,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'^\d*\.?\d*$'),
-                            ),
-                          ],
-                          maxLines: 1,
-                        ),
-                      ),
-                    ],
-                  ).marginOnly(bottom: 5),
-                  Row(
-                    children: [
-                      Expanded(child: Text('Purpose').color(colorMain)),
-                      Expanded(
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Button(
-                                height: 46,
-                                color: _cylinderPurpose == 0
-                                    ? colorMain
-                                    : Colors.grey,
-                                child: Text('Bottom').color(Colors.white),
-                                onPressed: () =>
-                                    setState(() => _cylinderPurpose = 0),
-                              ).marginOnly(right: 5),
-                            ),
-                            Expanded(
-                              child: Button(
-                                height: 46,
-                                color: _cylinderPurpose == 1
-                                    ? Colors.orange
-                                    : Colors.grey,
-                                child: Text('Deco').color(Colors.white),
-                                onPressed: () =>
-                                    setState(() => _cylinderPurpose = 1),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ).marginOnly(bottom: 5),
-                  Row(
-                    children: [
-                      Expanded(child: Text('O2 %').color(colorMain)),
-                      Expanded(
-                        flex: 2,
-                        child: InputText(
-                          controller: _textControllerCylinderO2,
-                          textAlign: TextAlign.center,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'^\d{0,3}$'),
-                            ),
-                          ],
-                          maxLines: 1,
-                        ).marginOnly(right: 20),
-                      ),
-                      Expanded(child: Text('He %').color(colorMain)),
-                      Expanded(
-                        flex: 2,
-                        child: InputText(
-                          controller: _textControllerCylinderHe,
-                          textAlign: TextAlign.center,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'^\d{0,2}$'),
-                            ),
-                          ],
-                          maxLines: 1,
-                        ),
-                      ),
-                    ],
-                  ).marginOnly(bottom: 10),
-                  Align(
-                    alignment: AlignmentGeometry.centerRight,
-                    child: IconButton(
-                      tooltip: 'Add Cylinder',
-                      onPressed: () {
-                        _addCylinder();
-                      },
-                      icon: Icon(Icons.add_circle, color: colorMain, size: 40),
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: rightPanelContents,
                     ),
                   ),
-                  horizontalLine(),
                 ],
               ),
-            ),
-          ),
-
-          // 오른쪽: 결과 화면
-          Expanded(
-            flex: 3,
-            child: Container(
-              padding: EdgeInsets.all(20),
-              child: ListView(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.baseline,
-                    textBaseline: TextBaseline.alphabetic,
-                    children: [
-                      Text('Cylinder List')
-                          .weight(FontWeight.bold)
-                          .color(colorMain)
-                          .marginOnly(bottom: 10)
-                          .marginOnly(right: 20),
-                      Button(
-                        height: 50,
-                        color: Colors.green,
-                        child: Text('Plan').color(Colors.white),
-                        onPressed: () {
-                          _startDivePlan();
-                        },
-                      ),
-                    ],
-                  ),
-                  _cylinderList(),
-                  horizontalLine(),
-                  _divePlanResult(),
-                ],
-              ),
-            ),
-          ),
-        ],
+            );
+          }
+        },
       ),
     );
   }
@@ -901,7 +892,7 @@ class _PagePlannerState extends State<PagePlanner> {
                           ).size(20).weight(FontWeight.bold).color(colorMain),
                           const SizedBox(width: 10),
                           Text(
-                            '${profile.time} min',
+                            '${profile.time.toStringAsFixed(1)} min',
                           ).size(14).color(Colors.grey[700]!),
                         ],
                       ),
@@ -1073,7 +1064,11 @@ class _PagePlannerState extends State<PagePlanner> {
         children: [
           _buildDetailRow(Icons.label, "Phase", step.phase),
           _buildDetailRow(Icons.height, "Depth", "${step.depth} m"),
-          _buildDetailRow(Icons.timer, "Time Spent", "${step.time} min"),
+          _buildDetailRow(
+            Icons.timer,
+            "Time Spent",
+            "${step.time.toStringAsFixed(1)} min",
+          ),
           _buildDetailRow(Icons.air, "Gas Used", step.gasUsed.name),
           _buildDetailRow(
             Icons.compare_arrows,
@@ -1189,7 +1184,7 @@ class DiveProfileChart extends StatelessWidget {
 
       if (step.time <= 0) continue;
 
-      double nextTime = currentTime + step.time.toDouble();
+      double nextTime = currentTime + step.time;
       double nextDepth = step.depth.toDouble();
 
       // 💡 1. 실링이 0보다 클 때(Deco 상태)만 점을 찍고, 아니면 끊어버림(nullSpot)
