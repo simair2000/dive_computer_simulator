@@ -1,7 +1,5 @@
 // 기존 pagePlanner.dart 전체를 아래 코드로 교체하시면 됩니다. (불필요한 입력 컨트롤러 제거 및 웨이포인트 UI 추가)
 
-import 'dart:math';
-
 import 'package:dive_computer_flutter/aPref.dart';
 import 'package:dive_computer_flutter/define.dart';
 import 'package:dive_computer_flutter/dive_planner.dart';
@@ -13,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:go_router/go_router.dart';
+import 'package:fl_chart/fl_chart.dart';
 
 class PagePlanner extends StatefulWidget {
   const PagePlanner({super.key});
@@ -122,7 +121,7 @@ class _PagePlannerState extends State<PagePlanner> {
                   Container(
                     padding: EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.5),
+                      color: Colors.white.withAlpha(100),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: colorMain.withOpacity(0.3)),
                     ),
@@ -182,34 +181,76 @@ class _PagePlannerState extends State<PagePlanner> {
                           const SizedBox(height: 10),
                           const Divider(height: 1),
                           const SizedBox(height: 10),
-                          ListView.builder(
+                          ReorderableListView.builder(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
+                            buildDefaultDragHandles: false, // 우측 기본 햄버거 아이콘 끄기
                             itemCount: waypoints.length,
+                            onReorder: (int oldIndex, int newIndex) {
+                              setState(() {
+                                // 아이템을 아래로 이동할 때 인덱스 보정 (플러터 기본 규칙)
+                                if (oldIndex < newIndex) {
+                                  newIndex -= 1;
+                                }
+                                // 배열에서 뽑아서 새 위치에 삽입
+                                final item = waypoints.removeAt(oldIndex);
+                                waypoints.insert(newIndex, item);
+                              });
+                            },
                             itemBuilder: (context, index) {
                               var wp = waypoints[index];
-                              return Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    '${index + 1}.',
-                                  ).weight(FontWeight.bold).color(colorMain),
-                                  Text('${wp.depth} m').color(Colors.black87),
-                                  Text('${wp.time} min').color(Colors.black87),
-                                  IconButton(
-                                    icon: Icon(
-                                      Icons.delete,
-                                      color: Colors.redAccent,
-                                      size: 20,
+
+                              return Container(
+                                // 🌟 ReorderableListView의 자식은 반드시 고유한 Key가 필요합니다.
+                                key: ObjectKey(wp),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 6.0,
+                                ),
+                                child: Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        // 🌟 드래그 손잡이(핸들) 영역
+                                        ReorderableDragStartListener(
+                                          index: index,
+                                          child: MouseRegion(
+                                            cursor: SystemMouseCursors
+                                                .grab, // 마우스 오버 시 손바닥 커서로 변경
+                                            child: Icon(
+                                              Icons.drag_indicator,
+                                              color: Colors.grey[400],
+                                              size: 22,
+                                            ).marginOnly(right: 8),
+                                          ),
+                                        ),
+                                        Text('${index + 1}.')
+                                            .weight(FontWeight.bold)
+                                            .color(colorMain),
+                                      ],
                                     ),
-                                    onPressed: () {
-                                      setState(() {
-                                        waypoints.removeAt(index);
-                                      });
-                                    },
-                                  ),
-                                ],
+                                    Text('${wp.depth} m').color(Colors.black87),
+                                    Text(
+                                      '${wp.time} min',
+                                    ).color(Colors.black87),
+                                    IconButton(
+                                      icon: Icon(
+                                        Icons.delete,
+                                        color: Colors.redAccent,
+                                        size: 20,
+                                      ),
+                                      padding: EdgeInsets.zero,
+                                      constraints:
+                                          const BoxConstraints(), // 아이콘 버튼 여백 축소
+                                      onPressed: () {
+                                        setState(() {
+                                          waypoints.removeAt(index);
+                                        });
+                                      },
+                                    ),
+                                  ],
+                                ),
                               );
                             },
                           ),
@@ -718,7 +759,25 @@ class _PagePlannerState extends State<PagePlanner> {
       children: [
         _buildSummaryCard(),
         const SizedBox(height: 20),
-        Text('Dive Profile')
+
+        // ==========================================
+        // 🌟 여기에 다이브 프로필 차트를 삽입합니다!
+        // ==========================================
+        if (_planResult!.isFeasible) ...[
+          Text('Profile Chart')
+              .weight(FontWeight.bold)
+              .color(colorMain)
+              .size(18)
+              .marginOnly(bottom: 10),
+          DiveProfileChart(
+            profile: _planResult!.profile,
+            totalDiveTime: _planResult!.totalDiveTime,
+          ),
+          const SizedBox(height: 20),
+        ],
+
+        // ==========================================
+        Text('Dive Profile Timeline')
             .weight(FontWeight.bold)
             .color(colorMain)
             .size(18)
@@ -729,7 +788,7 @@ class _PagePlannerState extends State<PagePlanner> {
               left: BorderSide(color: colorMain.withAlpha(100), width: 3),
             ),
           ),
-          margin: EdgeInsets.only(left: 10),
+          margin: const EdgeInsets.only(left: 10),
           child: ListView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -1092,6 +1151,291 @@ class _PagePlannerState extends State<PagePlanner> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ==========================================
+// 다이브 프로필 차트 위젯 (fl_chart 활용)
+// ==========================================
+class DiveProfileChart extends StatelessWidget {
+  final List<DiveStep> profile;
+  final double totalDiveTime;
+
+  const DiveProfileChart({
+    super.key,
+    required this.profile,
+    required this.totalDiveTime,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (profile.isEmpty) return const SizedBox();
+
+    List<LineChartBarData> lineBars = [];
+    List<LineChartBarData> profileBars = [];
+    List<FlSpot> allSpots = [const FlSpot(0, 0)];
+
+    // 💡 1. 실링 시작을 nullSpot으로 초기화 (0분일 때 수면에 빨간 선 그리지 않음)
+    List<FlSpot> ceilingSpots = [FlSpot.nullSpot];
+
+    double currentTime = 0.0;
+    double currentDepth = 0.0;
+    double maxDepth = 0.0;
+
+    for (var step in profile) {
+      if (step.depth > maxDepth) maxDepth = step.depth.toDouble();
+
+      if (step.time <= 0) continue;
+
+      double nextTime = currentTime + step.time.toDouble();
+      double nextDepth = step.depth.toDouble();
+
+      // 💡 1. 실링이 0보다 클 때(Deco 상태)만 점을 찍고, 아니면 끊어버림(nullSpot)
+      if (step.ceiling > 0) {
+        ceilingSpots.add(FlSpot(nextTime, -step.ceiling.toDouble()));
+      } else {
+        ceilingSpots.add(FlSpot.nullSpot);
+      }
+
+      Color segmentColor = step.gasUsed.purpose == GasPurpose.bottom
+          ? Colors.blueAccent
+          : Colors.orangeAccent;
+
+      profileBars.add(
+        LineChartBarData(
+          spots: [
+            FlSpot(currentTime, -currentDepth),
+            FlSpot(nextTime, -nextDepth),
+          ],
+          isCurved: false,
+          color: segmentColor,
+          barWidth: 2,
+          isStrokeCapRound: true,
+          dotData: FlDotData(
+            show: step.phase == 'Deco Stop' || step.phase == 'Level Stay',
+            getDotPainter: (spot, percent, barData, index) {
+              return FlDotCirclePainter(
+                radius: 3,
+                color: segmentColor,
+                strokeWidth: 1,
+                strokeColor: Colors.white,
+              );
+            },
+          ),
+        ),
+      );
+
+      allSpots.add(FlSpot(nextTime, -nextDepth));
+      currentTime = nextTime;
+      currentDepth = nextDepth;
+    }
+
+    //[Layer Index 0] 투명 배경 영역
+    lineBars.add(
+      LineChartBarData(
+        spots: allSpots,
+        color: Colors.blueAccent.withOpacity(0.0),
+        dotData: const FlDotData(show: false),
+        belowBarData: BarAreaData(
+          show: true,
+          color: Colors.lightBlue.withOpacity(0.1),
+        ),
+      ),
+    );
+
+    // [Layer Index 1] 데코 실링(Ceiling) 라인 (빨간색 점선)
+    lineBars.add(
+      LineChartBarData(
+        spots: ceilingSpots,
+        isCurved: false,
+        color: Colors.redAccent,
+        barWidth: 1,
+        // isStrokeCapRound: true,
+        // dashArray: [5, 5],
+        dotData: const FlDotData(show: false),
+      ),
+    );
+
+    //[Layer Index 2 이상] 다이브 프로필 라인들 추가
+    lineBars.addAll(profileBars);
+
+    double finalMaxX = currentTime > totalDiveTime
+        ? currentTime
+        : totalDiveTime;
+    if (finalMaxX <= 0) finalMaxX = 10;
+    double xInterval = (finalMaxX / 5).clamp(1, 999).toDouble();
+
+    return Container(
+      height: 300,
+      padding: const EdgeInsets.only(right: 20, top: 20, bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.withOpacity(0.3)),
+      ),
+      child: LineChart(
+        LineChartData(
+          lineBarsData: lineBars,
+          minX: 0,
+          maxX: finalMaxX + (finalMaxX * 0.05),
+          minY: -(maxDepth + 5),
+          maxY: 2,
+          clipData: const FlClipData.all(),
+          gridData: FlGridData(
+            show: true,
+            drawVerticalLine: true,
+            horizontalInterval: 10,
+            getDrawingHorizontalLine: (value) =>
+                FlLine(color: Colors.grey.withOpacity(0.2), strokeWidth: 1),
+            getDrawingVerticalLine: (value) =>
+                FlLine(color: Colors.grey.withOpacity(0.2), strokeWidth: 1),
+          ),
+          titlesData: FlTitlesData(
+            show: true,
+            topTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
+            rightTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
+            bottomTitles: AxisTitles(
+              axisNameWidget: const Text(
+                "Time (min)",
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+              axisNameSize: 20,
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 30,
+                interval: xInterval,
+                getTitlesWidget: (value, meta) {
+                  return SideTitleWidget(
+                    meta: meta,
+                    child: Text(
+                      value.toInt().toString(),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            leftTitles: AxisTitles(
+              axisNameWidget: const Text(
+                "Depth (m)",
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+              axisNameSize: 20,
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 35,
+                interval: 10,
+                getTitlesWidget: (value, meta) {
+                  if (value > 0) return const SizedBox();
+                  return SideTitleWidget(
+                    meta: meta,
+                    child: Text(
+                      value.abs().toInt().toString(),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          borderData: FlBorderData(
+            show: true,
+            border: Border(
+              bottom: BorderSide(color: Colors.grey.withAlpha(100), width: 1),
+              left: BorderSide(color: Colors.grey.withAlpha(100), width: 1),
+            ),
+          ),
+          lineTouchData: LineTouchData(
+            // 💡 마우스 hover 시 나타나는 세로 선을 '가늘고 연한 점선'으로 수정
+            getTouchedSpotIndicator:
+                (LineChartBarData barData, List<int> spotIndexes) {
+                  return spotIndexes.map((index) {
+                    return TouchedSpotIndicatorData(
+                      FlLine(
+                        color: Colors.grey.withAlpha(100), // 연한 회색
+                        strokeWidth: 2, // 아주 가는 굵기
+                        dashArray: [3, 3], // 점선 효과 (선 길이 3, 여백 3)
+                      ),
+                      FlDotData(
+                        show: true,
+                        getDotPainter: (spot, percent, barData, index) {
+                          return FlDotCirclePainter(
+                            radius: 4,
+                            color: barData.color ?? Colors.blueAccent,
+                            strokeWidth: 2,
+                            strokeColor: Colors.white,
+                          );
+                        },
+                      ),
+                    );
+                  }).toList();
+                },
+            touchTooltipData: LineTouchTooltipData(
+              tooltipBorderRadius: BorderRadius.all(Radius.circular(5)),
+              getTooltipItems: (touchedSpots) {
+                return touchedSpots.map((spot) {
+                  if (spot.barIndex == 0 || spot.barIndex == 1) return null;
+
+                  final firstProfileSpot = touchedSpots.firstWhere(
+                    (s) => s.barIndex > 1,
+                  );
+                  if (spot != firstProfileSpot) return null;
+
+                  double currentCeiling = 0.0;
+                  double t = 0.0;
+                  for (var s in profile) {
+                    if (s.time <= 0) continue;
+                    t += s.time;
+                    if ((t - spot.x).abs() < 0.01) {
+                      currentCeiling = s.ceiling;
+                      break;
+                    }
+                  }
+
+                  return LineTooltipItem(
+                    '${spot.x.toInt()} min\n',
+                    const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                    children: [
+                      TextSpan(
+                        text: 'Depth: ${spot.y.abs().toStringAsFixed(1)} m',
+                        style: const TextStyle(
+                          color: Colors.yellowAccent,
+                          fontSize: 12,
+                        ),
+                      ),
+                      if (currentCeiling > 0)
+                        TextSpan(
+                          text:
+                              '\nCeiling: ${currentCeiling.toStringAsFixed(1)} m',
+                          style: const TextStyle(
+                            color: Colors.redAccent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                    ],
+                  );
+                }).toList();
+              },
+            ),
+          ),
+        ),
       ),
     );
   }

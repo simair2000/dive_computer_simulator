@@ -77,6 +77,7 @@ class DiveStep {
   final double cns;
   final double otu;
   final double ndl;
+  final double ceiling;
 
   DiveStep(
     this.phase,
@@ -88,6 +89,7 @@ class DiveStep {
     this.cns = 0.0,
     this.otu = 0.0,
     this.ndl = 99.0,
+    this.ceiling = 0.0,
   });
 }
 
@@ -129,9 +131,8 @@ class DivePlanner2 {
       for (var c in input.cylinders) c: 0.0,
     };
 
-    if (input.waypoints.isEmpty) {
+    if (input.waypoints.isEmpty)
       return _failResult(["ERROR: No dive waypoints provided."]);
-    }
 
     double surfacePressure = 1.013;
     double vaporPressure = 0.0627;
@@ -142,7 +143,7 @@ class DivePlanner2 {
     double currentDepth = 0.0;
     double totalElapsed = 0.0;
     double currentCns = 0.0;
-    double currentOTU = 0.0; // OTU 누적 변수
+    double currentOTU = 0.0;
     Cylinder? currentGas;
 
     double maxDiveDepth = input.waypoints.map((e) => e.depth).reduce(max);
@@ -157,9 +158,8 @@ class DivePlanner2 {
         currentGas,
         isDecoPhase: false,
       );
-      if (bestGas == null) {
+      if (bestGas == null)
         return _failResult(["ERROR: No suitable gas for depth ${wp.depth}m."]);
-      }
 
       if (currentGas != bestGas) {
         currentGas = bestGas;
@@ -172,6 +172,8 @@ class DivePlanner2 {
             currentDepth,
             currentGas,
           );
+          // 💡 실링 계산 추가
+          double currentCeiling = _calcCeiling(simN2, simHe, gfHigh);
           profile.add(
             DiveStep(
               "Gas Switch",
@@ -181,14 +183,14 @@ class DivePlanner2 {
               0.0,
               pO2: switchPO2,
               cns: currentCns,
-              otu: currentOTU, // OTU 반영
+              otu: currentOTU,
               ndl: switchNdl,
+              ceiling: currentCeiling,
             ),
           );
         }
       }
 
-      // 이동 (Descent or Ascent)
       double travelDist = (wp.depth - currentDepth).abs();
       if (travelDist > 0) {
         double speed = wp.depth > currentDepth
@@ -212,13 +214,14 @@ class DivePlanner2 {
         gasConsumption[currentGas] =
             gasConsumption[currentGas]! + travelGasUsed;
 
-        // CNS, OTU, PO2, NDL 계산
         double avgPO2 = (1.0 + avgTravelDepth / 10.0) * currentGas.fractionO2;
         currentCns += _getCnsRatePerMinute(avgPO2) * travelTime;
-        currentOTU += _getOtuRatePerMinute(avgPO2) * travelTime; // OTU 누적
+        currentOTU += _getOtuRatePerMinute(avgPO2) * travelTime;
 
         double endPO2 = (1.0 + wp.depth / 10.0) * currentGas.fractionO2;
         double currentNdl = _calculateNDL(simN2, simHe, wp.depth, currentGas);
+        // 💡 실링 계산 추가
+        double currentCeiling = _calcCeiling(simN2, simHe, gfHigh);
 
         profile.add(
           DiveStep(
@@ -229,20 +232,21 @@ class DivePlanner2 {
             travelGasUsed,
             pO2: endPO2,
             cns: currentCns,
-            otu: currentOTU, // OTU 반영
+            otu: currentOTU,
             ndl: currentNdl,
+            ceiling: currentCeiling,
           ),
         );
         totalElapsed += travelTime;
         currentDepth = wp.depth;
       }
 
-      // 체류 (Level Stay)
       if (wp.time > 0) {
         int phaseTime = 0;
         double phaseGasUsed = 0.0;
         double lastPO2 = (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
         double lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas);
+        double lastCeiling = _calcCeiling(simN2, simHe, gfHigh);
 
         for (int m = 0; m < wp.time; m++) {
           Cylinder? bestStayGas = _getBestGasAtDepth(
@@ -264,14 +268,16 @@ class DivePlanner2 {
                   phaseGasUsed,
                   pO2: lastPO2,
                   cns: currentCns,
-                  otu: currentOTU, // OTU 반영
+                  otu: currentOTU,
                   ndl: lastNdl,
+                  ceiling: lastCeiling,
                 ),
               );
             }
             currentGas = bestStayGas;
             lastPO2 = (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
             lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas);
+            lastCeiling = _calcCeiling(simN2, simHe, gfHigh);
             profile.add(
               DiveStep(
                 "Gas Switch",
@@ -281,8 +287,9 @@ class DivePlanner2 {
                 0.0,
                 pO2: lastPO2,
                 cns: currentCns,
-                otu: currentOTU, // OTU 반영
+                otu: currentOTU,
                 ndl: lastNdl,
+                ceiling: lastCeiling,
               ),
             );
             phaseTime = 0;
@@ -302,8 +309,9 @@ class DivePlanner2 {
 
           lastPO2 = (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
           currentCns += _getCnsRatePerMinute(lastPO2) * 1.0;
-          currentOTU += _getOtuRatePerMinute(lastPO2) * 1.0; // OTU 누적
+          currentOTU += _getOtuRatePerMinute(lastPO2) * 1.0;
           lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas);
+          lastCeiling = _calcCeiling(simN2, simHe, gfHigh); // 매 분 갱신
 
           phaseTime++;
           phaseGasUsed += minGasUsed;
@@ -320,15 +328,15 @@ class DivePlanner2 {
               phaseGasUsed,
               pO2: lastPO2,
               cns: currentCns,
-              otu: currentOTU, // OTU 반영
+              otu: currentOTU,
               ndl: lastNdl,
+              ceiling: lastCeiling,
             ),
           );
         }
       }
     }
 
-    // 최종 상승 및 감압
     while (currentDepth > 0) {
       double nextStop = (currentDepth / 3).floor() * 3.0;
       if (nextStop == currentDepth) nextStop -= 3.0;
@@ -356,10 +364,11 @@ class DivePlanner2 {
 
         double avgPO2 = (1.0 + avgDepth / 10.0) * currentGas.fractionO2;
         currentCns += _getCnsRatePerMinute(avgPO2) * travelTime;
-        currentOTU += _getOtuRatePerMinute(avgPO2) * travelTime; // OTU 누적
+        currentOTU += _getOtuRatePerMinute(avgPO2) * travelTime;
 
         double endPO2 = (1.0 + nextStop / 10.0) * currentGas.fractionO2;
         double currentNdl = _calculateNDL(simN2, simHe, nextStop, currentGas);
+        double currentCeiling = _calcCeiling(simN2, simHe, gfHigh);
 
         currentDepth = nextStop;
         totalElapsed += travelTime;
@@ -374,8 +383,9 @@ class DivePlanner2 {
               travelGas,
               pO2: endPO2,
               cns: currentCns,
-              otu: currentOTU, // OTU 반영
+              otu: currentOTU,
               ndl: currentNdl,
+              ceiling: currentCeiling,
             ),
           );
         } else {
@@ -388,8 +398,9 @@ class DivePlanner2 {
               travelGas,
               pO2: endPO2,
               cns: currentCns,
-              otu: currentOTU, // OTU 반영
+              otu: currentOTU,
               ndl: currentNdl,
+              ceiling: currentCeiling,
             ),
           );
           break;
@@ -412,6 +423,7 @@ class DivePlanner2 {
             currentDepth,
             currentGas,
           );
+          double switchCeiling = _calcCeiling(simN2, simHe, gfHigh);
           profile.add(
             DiveStep(
               "Gas Switch",
@@ -421,8 +433,9 @@ class DivePlanner2 {
               0,
               pO2: switchPO2,
               cns: currentCns,
-              otu: currentOTU, // OTU 반영
+              otu: currentOTU,
               ndl: switchNdl,
+              ceiling: switchCeiling,
             ),
           );
         }
@@ -440,13 +453,14 @@ class DivePlanner2 {
 
         double po2 = (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
         currentCns += _getCnsRatePerMinute(po2) * 1.0;
-        currentOTU += _getOtuRatePerMinute(po2) * 1.0; // OTU 누적
+        currentOTU += _getOtuRatePerMinute(po2) * 1.0;
         double currentNdl = _calculateNDL(
           simN2,
           simHe,
           currentDepth,
           currentGas,
         );
+        double currentCeiling = _calcCeiling(simN2, simHe, gfHigh);
 
         if (profile.isNotEmpty &&
             profile.last.phase == "Deco Stop" &&
@@ -462,8 +476,9 @@ class DivePlanner2 {
               last.gasConsumedLiters + stopGas,
               pO2: po2,
               cns: currentCns,
-              otu: currentOTU, // OTU 반영
+              otu: currentOTU,
               ndl: currentNdl,
+              ceiling: currentCeiling,
             ),
           );
         } else {
@@ -476,8 +491,9 @@ class DivePlanner2 {
               stopGas,
               pO2: po2,
               cns: currentCns,
-              otu: currentOTU, // OTU 반영
+              otu: currentOTU,
               ndl: currentNdl,
+              ceiling: currentCeiling,
             ),
           );
         }
@@ -485,7 +501,6 @@ class DivePlanner2 {
       }
     }
 
-    // --- 생략 (탱크 잔압 경고 처리 및 결과 반환은 기존과 동일) ---
     Map<Cylinder, int> remainingPressure = {};
     for (var c in input.cylinders) {
       double usedBar = gasConsumption[c]! / (c.volume * c.count);
@@ -497,7 +512,7 @@ class DivePlanner2 {
           warnings.add("CRITICAL: Gas [${c.name}] completely depleted!");
         } else {
           warnings.add(
-            "WARNING: Low gas pressure in[${c.name}] ($remain bar).",
+            "WARNING: Low gas pressure in [${c.name}] ($remain bar).",
           );
         }
       }
