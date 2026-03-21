@@ -257,6 +257,90 @@ class _PagePlannerState extends State<PagePlanner> {
                       .color(colorMain)
                       .marginOnly(bottom: 10),
                   Row(
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    children: [
+                      Button(
+                        child: Text('AIR').color(Colors.white),
+                        onPressed: () {
+                          setState(() {
+                            _textControllerCylinderName.text = 'AIR';
+                            _textControllerCylinderO2.text = '21';
+                            _textControllerCylinderHe.text = '0';
+                          });
+                        },
+                      ).marginOnly(right: 5),
+                      Button(
+                        child: Text('EAN32').color(Colors.white),
+                        onPressed: () {
+                          setState(() {
+                            _textControllerCylinderName.text = 'EAN32';
+                            _textControllerCylinderO2.text = '32';
+                            _textControllerCylinderHe.text = '0';
+                          });
+                        },
+                      ).marginOnly(right: 5),
+                      Button(
+                        child: Text('EAN50').color(Colors.white),
+                        onPressed: () {
+                          setState(() {
+                            _textControllerCylinderName.text = 'EAN50';
+                            _textControllerCylinderO2.text = '50';
+                            _textControllerCylinderHe.text = '0';
+                          });
+                        },
+                      ).marginOnly(right: 5),
+                      Button(
+                        child: Text('100% O2').color(Colors.white),
+                        onPressed: () {
+                          setState(() {
+                            _textControllerCylinderName.text = '100% O2';
+                            _textControllerCylinderO2.text = '100';
+                            _textControllerCylinderHe.text = '0';
+                          });
+                        },
+                      ),
+                    ],
+                  ).marginOnly(bottom: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    children: [
+                      Text('O2/He')
+                          .color(colorMain)
+                          .weight(FontWeight.bold)
+                          .marginOnly(right: 10),
+                      Button(
+                        child: Text('21/35').color(Colors.white),
+                        onPressed: () {
+                          setState(() {
+                            _textControllerCylinderName.text = '21/35';
+                            _textControllerCylinderO2.text = '21';
+                            _textControllerCylinderHe.text = '35';
+                          });
+                        },
+                      ).marginOnly(right: 5),
+                      Button(
+                        child: Text('18/45').color(Colors.white),
+                        onPressed: () {
+                          setState(() {
+                            _textControllerCylinderName.text = '18/45';
+                            _textControllerCylinderO2.text = '18';
+                            _textControllerCylinderHe.text = '45';
+                          });
+                        },
+                      ).marginOnly(right: 5),
+                      Button(
+                        child: Text('15/55').color(Colors.white),
+                        onPressed: () {
+                          setState(() {
+                            _textControllerCylinderName.text = '15/55';
+                            _textControllerCylinderO2.text = '15';
+                            _textControllerCylinderHe.text = '55';
+                          });
+                        },
+                      ),
+                    ],
+                  ).marginOnly(bottom: 10),
+                  Row(
                     children: [
                       Expanded(child: Text('Type').color(colorMain)),
                       Expanded(
@@ -932,6 +1016,11 @@ class _PagePlannerState extends State<PagePlanner> {
           _buildDetailRow(Icons.height, "Depth", "${step.depth} m"),
           _buildDetailRow(Icons.timer, "Time Spent", "${step.time} min"),
           _buildDetailRow(Icons.air, "Gas Used", step.gasUsed.name),
+          _buildDetailRow(
+            Icons.compare_arrows,
+            "END",
+            "${step.gasUsed.getEnd(step.depth.toDouble()).toStringAsFixed(1)}m",
+          ),
           Divider(height: 20, thickness: 1),
           _buildDetailRow(
             Icons.speed,
@@ -952,6 +1041,13 @@ class _PagePlannerState extends State<PagePlanner> {
             "CNS Limit",
             "${step.cns.toStringAsFixed(1)} %",
             color: step.cns >= 80 ? Colors.red : colorMain,
+          ),
+          _buildDetailRow(
+            Icons.coronavirus_outlined, // 혹은 어울리는 아이콘
+            "OTU Limit",
+            "${step.otu.toStringAsFixed(1)} units",
+            // 보통 일일 허용치를 300~600 정도로 잡습니다. 300 이상일 때 주황/빨강 경고 표시를 해줄 수 있습니다.
+            color: step.otu >= 300 ? Colors.orange : colorMain,
           ),
         ],
       ),

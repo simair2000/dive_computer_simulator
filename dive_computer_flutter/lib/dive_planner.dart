@@ -38,6 +38,11 @@ class Cylinder {
       ((APref.getData(AprefKey.PPO2_BOTTOM) / fractionO2) * 10) - 10;
   // 전체 가스 보유량(리터)
   double get totalLiters => volume * count * startPressure;
+
+  // END
+  double getEnd(double depth) {
+    return ((depth + 10) * (1 - fractionHe)) - 10;
+  }
 }
 
 /// 멀티레벨 다이빙을 위한 웨이포인트(경유지) 모델 (새로 추가)
@@ -70,6 +75,7 @@ class DiveStep {
   final double gasConsumedLiters;
   final double pO2;
   final double cns;
+  final double otu;
   final double ndl;
 
   DiveStep(
@@ -80,6 +86,7 @@ class DiveStep {
     this.gasConsumedLiters, {
     this.pO2 = 0.0,
     this.cns = 0.0,
+    this.otu = 0.0,
     this.ndl = 99.0,
   });
 }
@@ -122,8 +129,9 @@ class DivePlanner2 {
       for (var c in input.cylinders) c: 0.0,
     };
 
-    if (input.waypoints.isEmpty)
+    if (input.waypoints.isEmpty) {
       return _failResult(["ERROR: No dive waypoints provided."]);
+    }
 
     double surfacePressure = 1.013;
     double vaporPressure = 0.0627;
@@ -133,7 +141,8 @@ class DivePlanner2 {
 
     double currentDepth = 0.0;
     double totalElapsed = 0.0;
-    double currentCns = 0.0; // CNS 누적 변수 추가
+    double currentCns = 0.0;
+    double currentOTU = 0.0; // OTU 누적 변수
     Cylinder? currentGas;
 
     double maxDiveDepth = input.waypoints.map((e) => e.depth).reduce(max);
@@ -148,29 +157,31 @@ class DivePlanner2 {
         currentGas,
         isDecoPhase: false,
       );
-      if (bestGas == null)
+      if (bestGas == null) {
         return _failResult(["ERROR: No suitable gas for depth ${wp.depth}m."]);
+      }
 
       if (currentGas != bestGas) {
         currentGas = bestGas;
         if (currentDepth > 0) {
           double switchPO2 =
-              (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
+              (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
           double switchNdl = _calculateNDL(
             simN2,
             simHe,
             currentDepth,
-            currentGas!,
+            currentGas,
           );
           profile.add(
             DiveStep(
               "Gas Switch",
               currentDepth.toInt(),
               0,
-              currentGas!,
+              currentGas,
               0.0,
               pO2: switchPO2,
               cns: currentCns,
+              otu: currentOTU, // OTU 반영
               ndl: switchNdl,
             ),
           );
@@ -198,25 +209,28 @@ class DivePlanner2 {
         double avgTravelDepth = (currentDepth + wp.depth) / 2.0;
         double travelGasUsed =
             travelTime * input.rmv * (1.0 + avgTravelDepth / 10.0);
-        gasConsumption[currentGas!] =
+        gasConsumption[currentGas] =
             gasConsumption[currentGas]! + travelGasUsed;
 
-        // CNS, PO2, NDL 계산 추가
-        double avgPO2 = (1.0 + avgTravelDepth / 10.0) * currentGas!.fractionO2;
+        // CNS, OTU, PO2, NDL 계산
+        double avgPO2 = (1.0 + avgTravelDepth / 10.0) * currentGas.fractionO2;
         currentCns += _getCnsRatePerMinute(avgPO2) * travelTime;
-        double endPO2 = (1.0 + wp.depth / 10.0) * currentGas!.fractionO2;
-        double currentNdl = _calculateNDL(simN2, simHe, wp.depth, currentGas!);
+        currentOTU += _getOtuRatePerMinute(avgPO2) * travelTime; // OTU 누적
+
+        double endPO2 = (1.0 + wp.depth / 10.0) * currentGas.fractionO2;
+        double currentNdl = _calculateNDL(simN2, simHe, wp.depth, currentGas);
 
         profile.add(
           DiveStep(
             wp.depth > currentDepth ? "Descent" : "Ascent",
             wp.depth.toInt(),
             travelTime.ceil(),
-            currentGas!,
+            currentGas,
             travelGasUsed,
             pO2: endPO2,
             cns: currentCns,
-            ndl: currentNdl, // 세부 데이터 주입
+            otu: currentOTU, // OTU 반영
+            ndl: currentNdl,
           ),
         );
         totalElapsed += travelTime;
@@ -228,7 +242,7 @@ class DivePlanner2 {
         int phaseTime = 0;
         double phaseGasUsed = 0.0;
         double lastPO2 = (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
-        double lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas!);
+        double lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas);
 
         for (int m = 0; m < wp.time; m++) {
           Cylinder? bestStayGas = _getBestGasAtDepth(
@@ -240,7 +254,7 @@ class DivePlanner2 {
           );
 
           if (bestStayGas != null && bestStayGas != currentGas) {
-            if (phaseTime > 0)
+            if (phaseTime > 0) {
               profile.add(
                 DiveStep(
                   "Level Stay",
@@ -250,21 +264,24 @@ class DivePlanner2 {
                   phaseGasUsed,
                   pO2: lastPO2,
                   cns: currentCns,
+                  otu: currentOTU, // OTU 반영
                   ndl: lastNdl,
                 ),
               );
+            }
             currentGas = bestStayGas;
-            lastPO2 = (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
-            lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas!);
+            lastPO2 = (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
+            lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas);
             profile.add(
               DiveStep(
                 "Gas Switch",
                 currentDepth.toInt(),
                 0,
-                currentGas!,
+                currentGas,
                 0.0,
                 pO2: lastPO2,
                 cns: currentCns,
+                otu: currentOTU, // OTU 반영
                 ndl: lastNdl,
               ),
             );
@@ -281,19 +298,19 @@ class DivePlanner2 {
             currentGas!,
           );
           double minGasUsed = input.rmv * (1.0 + currentDepth / 10.0);
-          gasConsumption[currentGas!] =
-              gasConsumption[currentGas]! + minGasUsed;
+          gasConsumption[currentGas] = gasConsumption[currentGas]! + minGasUsed;
 
-          lastPO2 = (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
+          lastPO2 = (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
           currentCns += _getCnsRatePerMinute(lastPO2) * 1.0;
-          lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas!);
+          currentOTU += _getOtuRatePerMinute(lastPO2) * 1.0; // OTU 누적
+          lastNdl = _calculateNDL(simN2, simHe, currentDepth, currentGas);
 
           phaseTime++;
           phaseGasUsed += minGasUsed;
           totalElapsed += 1.0;
         }
 
-        if (phaseTime > 0)
+        if (phaseTime > 0) {
           profile.add(
             DiveStep(
               "Level Stay",
@@ -303,9 +320,11 @@ class DivePlanner2 {
               phaseGasUsed,
               pO2: lastPO2,
               cns: currentCns,
+              otu: currentOTU, // OTU 반영
               ndl: lastNdl,
             ),
           );
+        }
       }
     }
 
@@ -333,12 +352,14 @@ class DivePlanner2 {
 
         double avgDepth = (currentDepth + nextStop) / 2.0;
         double travelGas = travelTime * input.rmv * (1.0 + avgDepth / 10.0);
-        gasConsumption[currentGas!] = gasConsumption[currentGas]! + travelGas;
+        gasConsumption[currentGas] = gasConsumption[currentGas]! + travelGas;
 
-        double avgPO2 = (1.0 + avgDepth / 10.0) * currentGas!.fractionO2;
+        double avgPO2 = (1.0 + avgDepth / 10.0) * currentGas.fractionO2;
         currentCns += _getCnsRatePerMinute(avgPO2) * travelTime;
-        double endPO2 = (1.0 + nextStop / 10.0) * currentGas!.fractionO2;
-        double currentNdl = _calculateNDL(simN2, simHe, nextStop, currentGas!);
+        currentOTU += _getOtuRatePerMinute(avgPO2) * travelTime; // OTU 누적
+
+        double endPO2 = (1.0 + nextStop / 10.0) * currentGas.fractionO2;
+        double currentNdl = _calculateNDL(simN2, simHe, nextStop, currentGas);
 
         currentDepth = nextStop;
         totalElapsed += travelTime;
@@ -349,10 +370,11 @@ class DivePlanner2 {
               "Ascent",
               currentDepth.toInt(),
               travelTime.ceil(),
-              currentGas!,
+              currentGas,
               travelGas,
               pO2: endPO2,
               cns: currentCns,
+              otu: currentOTU, // OTU 반영
               ndl: currentNdl,
             ),
           );
@@ -362,10 +384,11 @@ class DivePlanner2 {
               "Surface",
               0,
               travelTime.ceil(),
-              currentGas!,
+              currentGas,
               travelGas,
               pO2: endPO2,
               cns: currentCns,
+              otu: currentOTU, // OTU 반영
               ndl: currentNdl,
             ),
           );
@@ -382,22 +405,23 @@ class DivePlanner2 {
         if (decoGas != null && decoGas != currentGas) {
           currentGas = decoGas;
           double switchPO2 =
-              (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
+              (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
           double switchNdl = _calculateNDL(
             simN2,
             simHe,
             currentDepth,
-            currentGas!,
+            currentGas,
           );
           profile.add(
             DiveStep(
               "Gas Switch",
               currentDepth.toInt(),
               0,
-              currentGas!,
+              currentGas,
               0,
               pO2: switchPO2,
               cns: currentCns,
+              otu: currentOTU, // OTU 반영
               ndl: switchNdl,
             ),
           );
@@ -412,15 +436,16 @@ class DivePlanner2 {
           currentGas!,
         );
         double stopGas = input.rmv * (1.0 + currentDepth / 10.0);
-        gasConsumption[currentGas!] = gasConsumption[currentGas]! + stopGas;
+        gasConsumption[currentGas] = gasConsumption[currentGas]! + stopGas;
 
-        double po2 = (1.0 + currentDepth / 10.0) * currentGas!.fractionO2;
+        double po2 = (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
         currentCns += _getCnsRatePerMinute(po2) * 1.0;
+        currentOTU += _getOtuRatePerMinute(po2) * 1.0; // OTU 누적
         double currentNdl = _calculateNDL(
           simN2,
           simHe,
           currentDepth,
-          currentGas!,
+          currentGas,
         );
 
         if (profile.isNotEmpty &&
@@ -437,6 +462,7 @@ class DivePlanner2 {
               last.gasConsumedLiters + stopGas,
               pO2: po2,
               cns: currentCns,
+              otu: currentOTU, // OTU 반영
               ndl: currentNdl,
             ),
           );
@@ -446,10 +472,11 @@ class DivePlanner2 {
               "Deco Stop",
               currentDepth.toInt(),
               1,
-              currentGas!,
+              currentGas,
               stopGas,
               pO2: po2,
               cns: currentCns,
+              otu: currentOTU, // OTU 반영
               ndl: currentNdl,
             ),
           );
@@ -458,6 +485,7 @@ class DivePlanner2 {
       }
     }
 
+    // --- 생략 (탱크 잔압 경고 처리 및 결과 반환은 기존과 동일) ---
     Map<Cylinder, int> remainingPressure = {};
     for (var c in input.cylinders) {
       double usedBar = gasConsumption[c]! / (c.volume * c.count);
@@ -560,8 +588,9 @@ class DivePlanner2 {
       List<Cylinder> bottomGases = usableCylinders
           .where((c) => c.purpose == GasPurpose.bottom)
           .toList();
-      if (bottomGases.isEmpty)
+      if (bottomGases.isEmpty) {
         bottomGases = usableCylinders; // Bottom이 없으면 아무거나
+      }
 
       // 남은 Bottom 탱크들 중 잔압이 가장 많은 것을 새롭게 선택
       bottomGases.sort((a, b) {
@@ -702,6 +731,13 @@ class DivePlanner2 {
     return ratePerMinute;
   }
 
+  // --- 새로 추가: 1분당 OTU 증가량 계산 ---
+  // 공식: OTU = 1분 * ((PO2 - 0.5) / 0.5) ^ (5/6)
+  double _getOtuRatePerMinute(double po2) {
+    if (po2 <= 0.5) return 0.0; // PO2가 0.5 이하일 때는 OTU가 누적되지 않음
+    return pow((po2 - 0.5) / 0.5, 5.0 / 6.0).toDouble();
+  }
+
   // --- 새로 추가: 특정 수심에서의 무감압 한계(NDL) 시뮬레이션 ---
   double _calculateNDL(
     List<double> currentN2,
@@ -710,8 +746,9 @@ class DivePlanner2 {
     Cylinder gas,
   ) {
     if (depth < 1.2) return 999.0;
-    if (!_buhlmann.isDepthSafe(0.0, currentN2, currentHe, gfHigh))
+    if (!_buhlmann.isDepthSafe(0.0, currentN2, currentHe, gfHigh)) {
       return 0.0; // 이미 데코에 걸린 상태
+    }
 
     List<double> simN2 = List.from(currentN2); // 원본 훼손 방지
     List<double> simHe = List.from(currentHe);
