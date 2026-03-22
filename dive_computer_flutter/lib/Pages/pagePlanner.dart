@@ -449,7 +449,7 @@ class _PagePlannerState extends State<PagePlanner> {
             },
           ),
         ],
-      ),
+      ).marginOnly(bottom: 10),
       _cylinderList(),
       horizontalLine(),
       _divePlanResult(),
@@ -645,7 +645,7 @@ class _PagePlannerState extends State<PagePlanner> {
       height: 120,
       child: Scrollbar(
         controller: _horizontalScrollController,
-        thumbVisibility: true,
+        thumbVisibility: GetPlatform.isWindows,
         thickness: 8.0,
         radius: const Radius.circular(10),
         child: ListView.builder(
