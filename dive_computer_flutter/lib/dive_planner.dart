@@ -341,6 +341,43 @@ class DivePlanner2 {
     bool hasDeco = false; // 감압(Deco) 진입 여부
 
     while (currentDepth > 0) {
+      // 🌟 [핵심 변경]: 매 수심 단계마다 가장 효율적인(산소가 높은) 기체 체크
+      // 감압 정지 중이 아니더라도 MOD 내에 들어오면 즉시 스위칭을 시도합니다.
+      Cylinder? bestGas = _getBestGasAtDepth(
+        input.cylinders,
+        currentDepth,
+        gasConsumption,
+        currentGas,
+        isDecoPhase: true, // 상승 단계이므로 DecoPhase 활성화
+      );
+
+      if (bestGas != null && bestGas != currentGas) {
+        currentGas = bestGas;
+        double switchPO2 = (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
+        double switchNdl = _calculateNDL(
+          simN2,
+          simHe,
+          currentDepth,
+          currentGas,
+        );
+        double switchCeiling = _calcCeiling(simN2, simHe, gfHigh);
+
+        profile.add(
+          DiveStep(
+            "Gas Switch",
+            currentDepth.toInt(),
+            0.0, // 스위칭 시간은 0 (실제로는 약 1~2분 소요되나 플래너 상 0)
+            currentGas,
+            0.0,
+            pO2: switchPO2,
+            cns: currentCns,
+            otu: currentOTU,
+            ndl: switchNdl,
+            ceiling: switchCeiling,
+          ),
+        );
+      }
+
       double nextStop = (currentDepth / 3).floor() * 3.0;
       if (nextStop == currentDepth) nextStop -= 3.0;
       if (nextStop < 0) nextStop = 0;
@@ -629,73 +666,61 @@ class DivePlanner2 {
     List<Cylinder> cylinders,
     double depth,
     Map<Cylinder, double> consumption,
-    Cylinder? currentGas, { // 현재 물고 있는 레귤레이터(탱크) 정보 추가
+    Cylinder? currentGas, {
     required bool isDecoPhase,
   }) {
     Cylinder? bestChoice;
     double bestO2 = -1.0;
 
-    // 1. 현재 수심(MOD)에서 호흡 가능한 안전한 탱크들만 필터링
+    // 1. 현재 수심에서 호흡 가능한 안전한 탱크 필터링
     List<Cylinder> safeCylinders = cylinders.where((c) {
       double mod = isDecoPhase ? c.decoMod : c.bottomMod;
-      return mod >= depth;
+      return mod >= (depth - 0.1); // 소수점 오차 방지
     }).toList();
 
     if (safeCylinders.isEmpty) return null;
 
-    // 2. 잔압이 스위치 임계치(30bar) 이하로 떨어진 고갈 탱크 제외
+    // 2. 잔압이 있는 탱크 필터링
     List<Cylinder> usableCylinders = safeCylinders.where((c) {
       double remainBar =
           c.startPressure - ((consumption[c] ?? 0) / (c.volume * c.count));
-      return remainBar > switchPressureBar;
+      return remainBar > 5; // 최소 5bar 이상 남은 것
     }).toList();
 
-    // 만약 모든 탱크가 고갈되었다면, 어쩔 수 없이 남은 것 중 써야 하므로 원복
     if (usableCylinders.isEmpty) usableCylinders = safeCylinders;
 
     if (isDecoPhase) {
-      // [상승 및 감압 단계] -> 산소(O2) 비율이 가장 높은 가스(Deco Gas)를 최우선으로 찾음
+      // [상승/감압 단계] -> 산소 농도가 높은 것을 최우선 (가속 감압 목적)
       for (var c in usableCylinders) {
+        // 산소가 더 높으면 무조건 후보
         if (c.fractionO2 > bestO2) {
           bestO2 = c.fractionO2;
           bestChoice = c;
-        } else if (c.fractionO2 == bestO2) {
-          // 산소 비율이 동일한 탱크가 여러 개일 경우 (예: EAN50 데코 탱크 2개)
-          // 1순위: 현재 물고 있는 탱크를 계속 유지 (잦은 스위칭 방지)
-          if (c == currentGas) {
-            bestChoice = currentGas;
-          }
-          // 2순위: 현재 물고 있는 탱크가 아니라면, 잔압이 더 많은 쪽 선택
-          else if (bestChoice != currentGas) {
-            double remainC =
-                c.startPressure -
-                ((consumption[c] ?? 0) / (c.volume * c.count));
-            double remainBest =
-                bestChoice!.startPressure -
-                ((consumption[bestChoice] ?? 0) /
-                    (bestChoice.volume * bestChoice.count));
-            if (remainC > remainBest) bestChoice = c;
-          }
+        }
+        // 산소가 같다면 현재 가스 유지 (잦은 스위칭 방지)
+        else if (c.fractionO2 == bestO2) {
+          if (c == currentGas) bestChoice = c;
+        }
+      }
+
+      // 🌟 [핵심 수정]: 현재 가스가 바닥 가스인데, 더 높은 산소의 데코 가스가 사용 가능하다면 스위칭 강제
+      if (currentGas != null && bestChoice != null) {
+        if (bestChoice.fractionO2 > currentGas.fractionO2) {
+          return bestChoice;
         }
       }
     } else {
-      // [바닥 하강 및 체류 단계] -> Bottom 가스를 우선
-      // 만약 현재 물고 있는 가스가 Bottom 용도이고 여전히 쓸만하다면 절대 바꾸지 않음! (Stickiness)
+      // [바닥/하강 단계] -> 기존 바닥 가스 유지 로직
       if (currentGas != null &&
           usableCylinders.contains(currentGas) &&
           currentGas.purpose == GasPurpose.bottom) {
         return currentGas;
       }
-
-      // Bottom 용도로 지정된 가스들 필터링
+      // ... (이하 동일)
       List<Cylinder> bottomGases = usableCylinders
           .where((c) => c.purpose == GasPurpose.bottom)
           .toList();
-      if (bottomGases.isEmpty) {
-        bottomGases = usableCylinders; // Bottom이 없으면 아무거나
-      }
-
-      // 남은 Bottom 탱크들 중 잔압이 가장 많은 것을 새롭게 선택
+      if (bottomGases.isEmpty) bottomGases = usableCylinders;
       bottomGases.sort((a, b) {
         double remainA =
             a.startPressure - ((consumption[a] ?? 0) / (a.volume * a.count));
@@ -703,12 +728,94 @@ class DivePlanner2 {
             b.startPressure - ((consumption[b] ?? 0) / (b.volume * b.count));
         return remainB.compareTo(remainA);
       });
-
       bestChoice = bottomGases.first;
     }
-
     return bestChoice;
   }
+  // Cylinder? _getBestGasAtDepth(
+  //   List<Cylinder> cylinders,
+  //   double depth,
+  //   Map<Cylinder, double> consumption,
+  //   Cylinder? currentGas, { // 현재 물고 있는 레귤레이터(탱크) 정보 추가
+  //   required bool isDecoPhase,
+  // }) {
+  //   Cylinder? bestChoice;
+  //   double bestO2 = -1.0;
+
+  //   // 1. 현재 수심(MOD)에서 호흡 가능한 안전한 탱크들만 필터링
+  //   List<Cylinder> safeCylinders = cylinders.where((c) {
+  //     double mod = isDecoPhase ? c.decoMod : c.bottomMod;
+  //     return mod >= depth;
+  //   }).toList();
+
+  //   if (safeCylinders.isEmpty) return null;
+
+  //   // 2. 잔압이 스위치 임계치(30bar) 이하로 떨어진 고갈 탱크 제외
+  //   List<Cylinder> usableCylinders = safeCylinders.where((c) {
+  //     double remainBar =
+  //         c.startPressure - ((consumption[c] ?? 0) / (c.volume * c.count));
+  //     return remainBar > switchPressureBar;
+  //   }).toList();
+
+  //   // 만약 모든 탱크가 고갈되었다면, 어쩔 수 없이 남은 것 중 써야 하므로 원복
+  //   if (usableCylinders.isEmpty) usableCylinders = safeCylinders;
+
+  //   if (isDecoPhase) {
+  //     // [상승 및 감압 단계] -> 산소(O2) 비율이 가장 높은 가스(Deco Gas)를 최우선으로 찾음
+  //     for (var c in usableCylinders) {
+  //       if (c.fractionO2 > bestO2) {
+  //         bestO2 = c.fractionO2;
+  //         bestChoice = c;
+  //       } else if (c.fractionO2 == bestO2) {
+  //         // 산소 비율이 동일한 탱크가 여러 개일 경우 (예: EAN50 데코 탱크 2개)
+  //         // 1순위: 현재 물고 있는 탱크를 계속 유지 (잦은 스위칭 방지)
+  //         if (c == currentGas) {
+  //           bestChoice = currentGas;
+  //         }
+  //         // 2순위: 현재 물고 있는 탱크가 아니라면, 잔압이 더 많은 쪽 선택
+  //         else if (bestChoice != currentGas) {
+  //           double remainC =
+  //               c.startPressure -
+  //               ((consumption[c] ?? 0) / (c.volume * c.count));
+  //           double remainBest =
+  //               bestChoice!.startPressure -
+  //               ((consumption[bestChoice] ?? 0) /
+  //                   (bestChoice.volume * bestChoice.count));
+  //           if (remainC > remainBest) bestChoice = c;
+  //         }
+  //       }
+  //     }
+  //   } else {
+  //     // [바닥 하강 및 체류 단계] -> Bottom 가스를 우선
+  //     // 만약 현재 물고 있는 가스가 Bottom 용도이고 여전히 쓸만하다면 절대 바꾸지 않음! (Stickiness)
+  //     if (currentGas != null &&
+  //         usableCylinders.contains(currentGas) &&
+  //         currentGas.purpose == GasPurpose.bottom) {
+  //       return currentGas;
+  //     }
+
+  //     // Bottom 용도로 지정된 가스들 필터링
+  //     List<Cylinder> bottomGases = usableCylinders
+  //         .where((c) => c.purpose == GasPurpose.bottom)
+  //         .toList();
+  //     if (bottomGases.isEmpty) {
+  //       bottomGases = usableCylinders; // Bottom이 없으면 아무거나
+  //     }
+
+  //     // 남은 Bottom 탱크들 중 잔압이 가장 많은 것을 새롭게 선택
+  //     bottomGases.sort((a, b) {
+  //       double remainA =
+  //           a.startPressure - ((consumption[a] ?? 0) / (a.volume * a.count));
+  //       double remainB =
+  //           b.startPressure - ((consumption[b] ?? 0) / (b.volume * b.count));
+  //       return remainB.compareTo(remainA);
+  //     });
+
+  //     bestChoice = bottomGases.first;
+  //   }
+
+  //   return bestChoice;
+  // }
 
   // --- 기존의 _simulateGasExchange, _calcSchreiner, _calcCeiling 등은 유지하되 ---
   // --- _calcCeiling에서 사용되는 공식이 Buhlmann 정석인지 확인 ---
