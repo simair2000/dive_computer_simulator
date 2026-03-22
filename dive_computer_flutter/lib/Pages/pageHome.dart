@@ -11,7 +11,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:go_router/go_router.dart';
-import 'package:window_manager/window_manager.dart';
 
 class PageHome extends StatefulWidget {
   const PageHome({super.key});
@@ -61,6 +60,13 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
         leading: const Icon(Icons.scuba_diving, color: Colors.white, size: 30),
         backgroundColor: colorMain,
         actions: [
+          IconButton(
+            tooltip: 'Go to the eRDPml Calculator',
+            onPressed: () {
+              context.goNamed(RoutePage.eRDP.name);
+            },
+            icon: const Icon(Icons.calculate, color: Colors.white),
+          ),
           IconButton(
             tooltip: 'Go to the diving planner',
             onPressed: () {

@@ -43,12 +43,13 @@ class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
               'Made by SangHoon Kim, PADI SCUBA Instructor #537076',
             ).color(colorMain).marginOnly(bottom: 30),
             _showGoButton
-                ? Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                ? Column(
                     children: [
                       Button(
+                        width: 200,
                         height: 50,
                         child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(
                               Icons.scuba_diving,
@@ -60,10 +61,12 @@ class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
                         onPressed: () {
                           context.goNamed(RoutePage.home.name);
                         },
-                      ).marginOnly(right: 10),
+                      ).marginOnly(bottom: 10),
                       Button(
+                        width: 200,
                         height: 50,
                         child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(
                               Icons.assignment,
@@ -75,9 +78,26 @@ class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
                         onPressed: () {
                           context.goNamed(RoutePage.planner.name);
                         },
+                      ).marginOnly(bottom: 10),
+                      Button(
+                        width: 200,
+                        height: 50,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.calculate,
+                              color: Colors.white,
+                            ).marginOnly(right: 5),
+                            Text('eRDP Calculator').color(Colors.white),
+                          ],
+                        ),
+                        onPressed: () {
+                          context.goNamed(RoutePage.eRDP.name);
+                        },
                       ),
                     ],
-                  )
+                  ).marginSymmetric(horizontal: 20)
                 : CircularProgressIndicator(color: colorMain),
           ],
         ),

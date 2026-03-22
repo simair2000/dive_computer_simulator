@@ -337,6 +337,9 @@ class DivePlanner2 {
       }
     }
 
+    bool safetyStopDone = false; // 안전정지 수행 여부
+    bool hasDeco = false; // 감압(Deco) 진입 여부
+
     while (currentDepth > 0) {
       double nextStop = (currentDepth / 3).floor() * 3.0;
       if (nextStop == currentDepth) nextStop -= 3.0;
@@ -346,6 +349,89 @@ class DivePlanner2 {
       double ceiling = _calcCeiling(simN2, simHe, currentGF);
 
       if (ceiling <= nextStop) {
+        double ascentSpeed =
+            (APref.getData(AprefKey.AscentSpeed) as num?)?.toDouble() ?? 9.0;
+
+        // 🌟 [추가됨] 무감압 다이빙 & 최대 수심 10m 이상일 때 5m에서 3분 안전정지 실행
+        if (nextStop == 0 &&
+            maxDiveDepth >= 10.0 &&
+            !hasDeco &&
+            !safetyStopDone) {
+          // 1. 현재 수심에서 5m까지 먼저 상승
+          if (currentDepth > 5.0) {
+            double travelTime = (currentDepth - 5.0) / ascentSpeed;
+            _simulateGasExchange(
+              simN2,
+              simHe,
+              currentDepth,
+              5.0,
+              travelTime,
+              currentGas!,
+            );
+
+            double avgDepth = (currentDepth + 5.0) / 2.0;
+            double travelGas = travelTime * input.rmv * (1.0 + avgDepth / 10.0);
+            gasConsumption[currentGas] =
+                gasConsumption[currentGas]! + travelGas;
+
+            double avgPO2 = (1.0 + avgDepth / 10.0) * currentGas.fractionO2;
+            currentCns += _getCnsRatePerMinute(avgPO2) * travelTime;
+            currentOTU += _getOtuRatePerMinute(avgPO2) * travelTime;
+
+            double endPO2 = (1.0 + 5.0 / 10.0) * currentGas.fractionO2;
+            double currentNdl = _calculateNDL(simN2, simHe, 5.0, currentGas);
+            double currentCeiling = _calcCeiling(simN2, simHe, gfHigh);
+
+            profile.add(
+              DiveStep(
+                "Ascent",
+                5,
+                travelTime,
+                currentGas,
+                travelGas,
+                pO2: endPO2,
+                cns: currentCns,
+                otu: currentOTU,
+                ndl: currentNdl,
+                ceiling: currentCeiling,
+              ),
+            );
+            currentDepth = 5.0;
+            totalElapsed += travelTime;
+          }
+
+          // 2. 5m에서 3분간 안전정지 (Safety Stop)
+          double stopTime = 3.0;
+          _simulateGasExchange(simN2, simHe, 5.0, 5.0, stopTime, currentGas!);
+          double stopGas = stopTime * input.rmv * (1.0 + 5.0 / 10.0);
+          gasConsumption[currentGas] = gasConsumption[currentGas]! + stopGas;
+
+          double po2 = (1.0 + 5.0 / 10.0) * currentGas.fractionO2;
+          currentCns += _getCnsRatePerMinute(po2) * stopTime;
+          currentOTU += _getOtuRatePerMinute(po2) * stopTime;
+          double stopNdl = _calculateNDL(simN2, simHe, 5.0, currentGas);
+          double stopCeiling = _calcCeiling(simN2, simHe, gfHigh);
+
+          profile.add(
+            DiveStep(
+              "Safety Stop",
+              5,
+              stopTime,
+              currentGas,
+              stopGas,
+              pO2: po2,
+              cns: currentCns,
+              otu: currentOTU,
+              ndl: stopNdl,
+              ceiling: stopCeiling,
+            ),
+          );
+          totalElapsed += stopTime;
+          safetyStopDone = true;
+
+          continue; // 3분 쉬었으니 다음 루프를 돌아 5m -> 0m (수면) 상승을 마저 진행합니다.
+        }
+
         double travelTime =
             (currentDepth - nextStop) /
             ((APref.getData(AprefKey.AscentSpeed) as num?)?.toDouble() ?? 9.0);
@@ -406,6 +492,8 @@ class DivePlanner2 {
           break;
         }
       } else {
+        hasDeco = true;
+
         Cylinder? decoGas = _getBestGasAtDepth(
           input.cylinders,
           currentDepth,

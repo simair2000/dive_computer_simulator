@@ -1,3 +1,4 @@
+import 'package:dive_computer_flutter/Pages/pageERDP.dart';
 import 'package:dive_computer_flutter/Pages/pageHome.dart';
 import 'package:dive_computer_flutter/Pages/pagePlanner.dart';
 import 'package:dive_computer_flutter/Pages/pageSettings.dart';
@@ -10,6 +11,7 @@ enum RoutePage {
   splash('/'),
   home('/home'),
   planner('/planner'),
+  eRDP('/erdp'),
   settings('/settings');
 
   const RoutePage(this.path);
@@ -41,6 +43,11 @@ final GoRouter router = GoRouter(
       name: RoutePage.settings.name,
       path: RoutePage.settings.path,
       pageBuilder: (context, state) => NoTransitionPage(child: PageSettings()),
+    ),
+    GoRoute(
+      name: RoutePage.eRDP.name,
+      path: RoutePage.eRDP.path,
+      pageBuilder: (context, state) => NoTransitionPage(child: PageErdp()),
     ),
   ],
 );

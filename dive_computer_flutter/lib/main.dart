@@ -5,7 +5,6 @@ import 'package:dive_computer_flutter/aPref.dart';
 import 'package:dive_computer_flutter/hiveHelper.dart';
 import 'package:dive_computer_flutter/router.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
@@ -22,7 +21,7 @@ Future<void> main() async {
       skipTaskbar: false,
       titleBarStyle: TitleBarStyle.normal,
       // alwaysOnTop: true,
-      minimumSize: Size(600, 300),
+      minimumSize: Size(300, 300),
     );
 
     windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -31,17 +30,24 @@ Future<void> main() async {
     });
   }
 
-  SystemChrome.setPreferredOrientations([
-    DeviceOrientation.landscapeLeft,
-    DeviceOrientation.landscapeRight,
-  ]).then((value) {
-    runApp(
-      MultiProvider(
-        providers: [ChangeNotifierProvider(create: (_) => HiveHelper())],
-        child: MyApp(),
-      ),
-    );
-  });
+  runApp(
+    MultiProvider(
+      providers: [ChangeNotifierProvider(create: (_) => HiveHelper())],
+      child: MyApp(),
+    ),
+  );
+
+  // SystemChrome.setPreferredOrientations([
+  //   DeviceOrientation.landscapeLeft,
+  //   DeviceOrientation.landscapeRight,
+  // ]).then((value) {
+  //   runApp(
+  //     MultiProvider(
+  //       providers: [ChangeNotifierProvider(create: (_) => HiveHelper())],
+  //       child: MyApp(),
+  //     ),
+  //   );
+  // });
 }
 
 class MyApp extends StatefulWidget {

@@ -465,6 +465,13 @@ class _PagePlannerState extends State<PagePlanner> {
         backgroundColor: colorMain,
         actions: [
           IconButton(
+            tooltip: 'Go to the eRDPml Calculator',
+            onPressed: () {
+              context.goNamed(RoutePage.eRDP.name);
+            },
+            icon: const Icon(Icons.calculate, color: Colors.white),
+          ),
+          IconButton(
             tooltip: 'Go to the diving simulator',
             onPressed: () {
               context.goNamed(RoutePage.home.name);
@@ -840,6 +847,10 @@ class _PagePlannerState extends State<PagePlanner> {
         stepIcon = Icons.timer_outlined;
         stepColor = Colors.orange;
         break;
+      case 'Safety Stop':
+        stepIcon = Icons.health_and_safety;
+        stepColor = Colors.green;
+        break;
       case 'Gas Switch':
         stepIcon = Icons.published_with_changes;
         stepColor = Colors.purple;
@@ -1209,7 +1220,10 @@ class DiveProfileChart extends StatelessWidget {
           barWidth: 2,
           isStrokeCapRound: true,
           dotData: FlDotData(
-            show: step.phase == 'Deco Stop' || step.phase == 'Level Stay',
+            show:
+                step.phase == 'Deco Stop' ||
+                step.phase == 'Level Stay' ||
+                step.phase == 'Safety Stop',
             getDotPainter: (spot, percent, barData, index) {
               return FlDotCirclePainter(
                 radius: 3,
