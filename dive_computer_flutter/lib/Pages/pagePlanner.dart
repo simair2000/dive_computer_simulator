@@ -229,7 +229,10 @@ class _PagePlannerState extends State<PagePlanner> {
             child: Button(
               height: 35,
               color: colorMain.withAlpha(200),
-              child: const Text('AIR').color(Colors.white).size(12),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: const Text('AIR').color(Colors.white).size(12),
+              ),
               onPressed: () => _applyPreset('Air', '21', '0', 0),
             ).marginOnly(right: 5),
           ),
@@ -237,7 +240,10 @@ class _PagePlannerState extends State<PagePlanner> {
             child: Button(
               height: 35,
               color: colorMain.withAlpha(200),
-              child: const Text('EAN32').color(Colors.white).size(12),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: const Text('EAN32').color(Colors.white).size(12),
+              ),
               onPressed: () => _applyPreset('EAN32', '32', '0', 0),
             ).marginOnly(right: 5),
           ),
@@ -245,7 +251,10 @@ class _PagePlannerState extends State<PagePlanner> {
             child: Button(
               height: 35,
               color: colorMain.withAlpha(200),
-              child: const Text('EAN50').color(Colors.white).size(12),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: const Text('EAN50').color(Colors.white).size(12),
+              ),
               onPressed: () =>
                   _applyPreset('EAN50', '50', '0', 1), // EAN50은 주로 Deco용
             ).marginOnly(right: 5),
@@ -254,7 +263,10 @@ class _PagePlannerState extends State<PagePlanner> {
             child: Button(
               height: 35,
               color: colorMain.withAlpha(200),
-              child: const Text('100% O2').color(Colors.white).size(11),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: const Text('100% O2').color(Colors.white).size(11),
+              ),
               onPressed: () =>
                   _applyPreset('100% O2', '100', '0', 1), // 100% O2는 Deco용
             ),
@@ -274,7 +286,10 @@ class _PagePlannerState extends State<PagePlanner> {
             child: Button(
               height: 35,
               color: colorMain.withAlpha(200),
-              child: const Text('21/35').color(Colors.white).size(12),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: const Text('21/35').color(Colors.white).size(12),
+              ),
               onPressed: () =>
                   _applyPreset('21/35', '21', '35', 0), // 트라이믹스 Bottom
             ).marginOnly(right: 5),
@@ -283,7 +298,10 @@ class _PagePlannerState extends State<PagePlanner> {
             child: Button(
               height: 35,
               color: colorMain.withAlpha(200),
-              child: const Text('18/45').color(Colors.white).size(12),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: const Text('18/45').color(Colors.white).size(12),
+              ),
               onPressed: () => _applyPreset('18/45', '18', '45', 0),
             ).marginOnly(right: 5),
           ),
@@ -291,7 +309,10 @@ class _PagePlannerState extends State<PagePlanner> {
             child: Button(
               height: 35,
               color: colorMain.withAlpha(200),
-              child: const Text('15/55').color(Colors.white).size(12),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: const Text('15/55').color(Colors.white).size(12),
+              ),
               onPressed: () => _applyPreset('15/55', '15', '55', 0),
             ),
           ),
@@ -367,7 +388,10 @@ class _PagePlannerState extends State<PagePlanner> {
                   child: Button(
                     height: 46,
                     color: _cylinderPurpose == 0 ? colorMain : Colors.grey,
-                    child: Text('Bottom').color(Colors.white),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text('Bottom').color(Colors.white),
+                    ),
                     onPressed: () => setState(() => _cylinderPurpose = 0),
                   ).marginOnly(right: 5),
                 ),
@@ -375,7 +399,10 @@ class _PagePlannerState extends State<PagePlanner> {
                   child: Button(
                     height: 46,
                     color: _cylinderPurpose == 1 ? Colors.orange : Colors.grey,
-                    child: Text('Deco').color(Colors.white),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text('Deco').color(Colors.white),
+                    ),
                     onPressed: () => setState(() => _cylinderPurpose = 1),
                   ),
                 ),
