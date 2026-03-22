@@ -131,8 +131,9 @@ class DivePlanner2 {
       for (var c in input.cylinders) c: 0.0,
     };
 
-    if (input.waypoints.isEmpty)
+    if (input.waypoints.isEmpty) {
       return _failResult(["ERROR: No dive waypoints provided."]);
+    }
 
     double surfacePressure = 1.013;
     double vaporPressure = 0.0627;
@@ -158,8 +159,9 @@ class DivePlanner2 {
         currentGas,
         isDecoPhase: false,
       );
-      if (bestGas == null)
+      if (bestGas == null) {
         return _failResult(["ERROR: No suitable gas for depth ${wp.depth}m."]);
+      }
 
       if (currentGas != bestGas) {
         currentGas = bestGas;
