@@ -1,16 +1,16 @@
+import 'package:dive_computer_flutter/buhlmann.dart'; // PadiERdp 클래스가 있는 파일
 import 'package:dive_computer_flutter/define.dart';
 import 'package:dive_computer_flutter/erdp.dart';
 import 'package:dive_computer_flutter/extensions.dart';
+import 'package:dive_computer_flutter/router.dart';
 import 'package:dive_computer_flutter/styles.dart';
 import 'package:dive_computer_flutter/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:get/get.dart';
 import 'package:go_router/go_router.dart';
 
-import '../router.dart';
-
-enum ErdpNodeType { dive, surface }
+// 🌟 멀티레벨 노드 타입 추가
+enum ErdpNodeType { dive, multiLevel, surface }
 
 // 각 다이빙/휴식 단계를 관리할 상태 모델
 class ErdpNode {
@@ -22,6 +22,7 @@ class ErdpNode {
   String pgOut = '-';
   int rnt = 0; // 잔류 질소 시간
   int andl = 0; // 조정된 무감압 한계 시간
+  String warning = ''; // 🌟 경고 메시지 저장용
 
   ErdpNode({required this.type, required VoidCallback onChanged}) {
     depthCtrl.addListener(onChanged);
@@ -61,7 +62,6 @@ class _PageErdpState extends State<PageErdp> {
     super.dispose();
   }
 
-  // 노드 추가 (입력 변경 시 자동 계산되도록 리스너 연결)
   void _addNode(ErdpNodeType type) {
     setState(() {
       _nodes.add(ErdpNode(type: type, onChanged: _calculateAll));
@@ -91,16 +91,27 @@ class _PageErdpState extends State<PageErdp> {
     });
   }
 
-  // 🌟 [핵심 로직] 위에서부터 아래로 순차적으로 eRDP 계산
+  // 🌟[핵심 로직] 위에서부터 아래로 순차적으로 eRDP 계산
   void _calculateAll() {
     String currentPG = '-';
+    double lastDepth = 0.0; // 멀티레벨 얕은 수심 체크용
 
     for (var node in _nodes) {
       node.pgIn = currentPG;
+      node.warning = ''; // 경고 초기화
 
-      if (node.type == ErdpNodeType.dive) {
+      if (node.type == ErdpNodeType.dive ||
+          node.type == ErdpNodeType.multiLevel) {
         double depth = double.tryParse(node.depthCtrl.text) ?? 0.0;
         int time = int.tryParse(node.timeCtrl.text) ?? 0;
+
+        // 🌟 멀티레벨 규정 체크: 반드시 이전 수심보다 얕아야 함
+        if (node.type == ErdpNodeType.multiLevel && depth > 0) {
+          if (depth >= lastDepth) {
+            node.warning =
+                'Multi-level depth must be shallower than the previous level.';
+          }
+        }
 
         if (depth > 0) {
           // ANDL 및 RNT 계산
@@ -121,6 +132,8 @@ class _PageErdpState extends State<PageErdp> {
           node.rnt = 0;
           node.andl = 0;
         }
+
+        lastDepth = depth; // 다음 멀티레벨을 위해 현재 수심 기억
       } else if (node.type == ErdpNodeType.surface) {
         int time = int.tryParse(node.timeCtrl.text) ?? 0;
         if (time > 0 && currentPG != '-' && currentPG != 'OOR') {
@@ -132,9 +145,31 @@ class _PageErdpState extends State<PageErdp> {
         } else {
           node.pgOut = currentPG;
         }
+        lastDepth = 0.0; // 수면 휴식 후엔 수심 초기화
       }
     }
     setState(() {}); // UI 업데이트
+  }
+
+  // 인덱스를 기반으로 다이빙 넘버와 레벨 번호 계산
+  String _getNodeTitle(int index) {
+    int diveNum = 0;
+    int levelNum = 1;
+    for (int i = 0; i <= index; i++) {
+      if (_nodes[i].type == ErdpNodeType.dive) {
+        diveNum++;
+        levelNum = 1;
+      } else if (_nodes[i].type == ErdpNodeType.multiLevel) {
+        levelNum++;
+      }
+    }
+
+    if (_nodes[index].type == ErdpNodeType.multiLevel) {
+      return 'Dive #$diveNum - Level $levelNum';
+    } else if (_nodes[index].type == ErdpNodeType.dive) {
+      return 'Dive #$diveNum';
+    }
+    return 'Surface Interval';
   }
 
   @override
@@ -175,15 +210,16 @@ class _PageErdpState extends State<PageErdp> {
             },
           ),
           IconButton(
-            tooltip: 'About eRDP',
+            tooltip: 'About eRDPml',
             icon: const Icon(Icons.help_outline, color: Colors.white),
             onPressed: () {
               showGetDialog(
                 'PADI eRDPml Mode',
                 'This calculator uses the recreational dive planner (RDP) table algorithms.\n\n'
                     '1. Enter Depth & Bottom Time to get your Pressure Group (PG).\n'
-                    '2. Add a Surface Interval to see your new PG.\n'
-                    '3. Add Repetitive Dives to automatically calculate your Residual Nitrogen Time (RNT) and Adjusted NDL (ANDL).',
+                    '2. Add a Multi-Level step to ascend to a shallower depth without a surface interval.\n'
+                    '3. Add a Surface Interval to see your new PG.\n'
+                    '4. Add Repetitive Dives to automatically calculate your Residual Nitrogen Time (RNT) and Adjusted NDL (ANDL).',
               );
             },
           ),
@@ -203,13 +239,11 @@ class _PageErdpState extends State<PageErdp> {
                   itemCount: _nodes.length,
                   itemBuilder: (context, index) {
                     var node = _nodes[index];
-                    int diveNumber = _nodes
-                        .sublist(0, index + 1)
-                        .where((n) => n.type == ErdpNodeType.dive)
-                        .length;
+                    String title = _getNodeTitle(index);
 
-                    if (node.type == ErdpNodeType.dive) {
-                      return _buildDiveCard(node, diveNumber);
+                    if (node.type == ErdpNodeType.dive ||
+                        node.type == ErdpNodeType.multiLevel) {
+                      return _buildDiveCard(node, title);
                     } else {
                       return _buildSurfaceCard(node);
                     }
@@ -225,17 +259,24 @@ class _PageErdpState extends State<PageErdp> {
     );
   }
 
-  // --- 다이빙 입력 카드 ---
-  Widget _buildDiveCard(ErdpNode node, int diveNumber) {
+  // --- 다이빙 & 멀티레벨 입력 카드 ---
+  Widget _buildDiveCard(ErdpNode node, String title) {
     bool hasRnt = node.pgIn != '-' && node.pgIn != 'OOR';
     bool isOor = node.pgOut == 'OOR';
+    bool isMulti = node.type == ErdpNodeType.multiLevel; // 🌟 멀티레벨 여부 확인
 
     return Card(
-      elevation: 2,
-      margin: const EdgeInsets.only(bottom: 15),
+      elevation: isMulti ? 1 : 2,
+      // 🌟 멀티레벨일 경우 같은 다이빙의 종속된 단계임을 나타내기 위해 좌측 여백 추가(들여쓰기)
+      margin: EdgeInsets.only(bottom: 15, left: isMulti ? 30 : 0),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: colorMain.withOpacity(0.3), width: 1),
+        side: BorderSide(
+          color: isMulti
+              ? Colors.indigoAccent.withOpacity(0.3)
+              : colorMain.withOpacity(0.3),
+          width: 1,
+        ),
       ),
       child: Padding(
         padding: const EdgeInsets.all(15.0),
@@ -244,11 +285,16 @@ class _PageErdpState extends State<PageErdp> {
           children: [
             Row(
               children: [
-                Icon(Icons.scuba_diving, color: colorMain, size: 24),
+                Icon(
+                  isMulti ? Icons.layers : Icons.scuba_diving,
+                  color: isMulti ? Colors.indigoAccent : colorMain,
+                  size: 24,
+                ),
                 const SizedBox(width: 8),
-                Text(
-                  'Dive #$diveNumber',
-                ).weight(FontWeight.bold).size(18).color(colorMain),
+                Text(title)
+                    .weight(FontWeight.bold)
+                    .size(18)
+                    .color(isMulti ? Colors.indigoAccent : colorMain),
                 const Spacer(),
                 if (hasRnt)
                   Container(
@@ -267,6 +313,34 @@ class _PageErdpState extends State<PageErdp> {
               ],
             ),
             const Divider(height: 20),
+
+            // 🌟 수심 얕게 제한 경고창
+            if (node.warning.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.all(8),
+                margin: const EdgeInsets.only(bottom: 10),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.warning_amber_rounded,
+                      color: Colors.red,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(node.warning)
+                          .color(Colors.red[800]!)
+                          .size(12)
+                          .weight(FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+
             Row(
               children: [
                 Expanded(
@@ -294,7 +368,7 @@ class _PageErdpState extends State<PageErdp> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Bottom Time (min)',
+                        'Stay Time (min)',
                       ).color(Colors.black54).size(12),
                       const SizedBox(height: 5),
                       InputText(
@@ -437,39 +511,73 @@ class _PageErdpState extends State<PageErdp> {
 
   // --- 하단 추가/삭제 컨트롤 버튼 ---
   Widget _buildControlButtons() {
-    bool isLastDive = _nodes.last.type == ErdpNodeType.dive;
+    ErdpNodeType lastType = _nodes.last.type;
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         if (_nodes.length > 1)
           IconButton(
             icon: const Icon(Icons.undo, color: Colors.redAccent),
             tooltip: 'Remove Last Step',
             onPressed: _removeLastNode,
-          ).marginOnly(right: 10),
-        Expanded(
-          child: Button(
+          ),
+
+        // 마지막이 수면 휴식이었으면 다음은 반드시 새로운 다이빙 시작
+        if (lastType == ErdpNodeType.surface)
+          Button(
             height: 50,
-            color: isLastDive ? Colors.teal : colorMain,
-            onPressed: () {
-              _addNode(isLastDive ? ErdpNodeType.surface : ErdpNodeType.dive);
-            },
+            color: colorMain,
+            onPressed: () => _addNode(ErdpNodeType.dive),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  isLastDive ? Icons.waves : Icons.scuba_diving,
-                  color: Colors.white,
-                ),
+                const Icon(Icons.scuba_diving, color: Colors.white),
                 const SizedBox(width: 8),
-                Text(
-                  isLastDive ? 'Add Surface Interval' : 'Add Repetitive Dive',
+                const Text(
+                  'Add Repetitive Dive',
                 ).color(Colors.white).weight(FontWeight.bold),
               ],
             ),
           ),
-        ),
+
+        // 🌟 마지막이 다이빙이거나 멀티레벨이었다면 두 가지 선택지 제공
+        if (lastType == ErdpNodeType.dive ||
+            lastType == ErdpNodeType.multiLevel) ...[
+          Button(
+            height: 50,
+            color: Colors.indigoAccent,
+            onPressed: () => _addNode(ErdpNodeType.multiLevel),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.layers, color: Colors.white),
+                const SizedBox(width: 8),
+                const Text(
+                  'Add Multi-Level',
+                ).color(Colors.white).weight(FontWeight.bold),
+              ],
+            ),
+          ),
+          Button(
+            height: 50,
+            color: Colors.teal,
+            onPressed: () => _addNode(ErdpNodeType.surface),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.waves, color: Colors.white),
+                const SizedBox(width: 8),
+                const Text(
+                  'Add Surface Interval',
+                ).color(Colors.white).weight(FontWeight.bold),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }
