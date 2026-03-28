@@ -1,5 +1,3 @@
-// 기존 pagePlanner.dart 전체를 아래 코드로 교체하시면 됩니다. (불필요한 입력 컨트롤러 제거 및 웨이포인트 UI 추가)
-
 import 'package:dive_computer_flutter/aPref.dart';
 import 'package:dive_computer_flutter/define.dart';
 import 'package:dive_computer_flutter/dive_planner.dart';
