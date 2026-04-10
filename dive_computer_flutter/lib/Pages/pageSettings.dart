@@ -23,6 +23,8 @@ class _PageSettingsState extends State<PageSettings> {
 
   final TextEditingController _textControllerAscent = TextEditingController();
   final TextEditingController _textControllerDescent = TextEditingController();
+  final TextEditingController _textControllerGasSwitch =
+      TextEditingController();
 
   var gfHighNotifier = ValueNotifier<double>(85);
   var gfLowNotifier = ValueNotifier<double>(40);
@@ -51,6 +53,7 @@ class _PageSettingsState extends State<PageSettings> {
   void dispose() {
     _textControllerDescent.dispose();
     _textControllerAscent.dispose();
+    _textControllerGasSwitch.dispose();
     super.dispose();
   }
 
@@ -186,6 +189,8 @@ class _PageSettingsState extends State<PageSettings> {
   Widget _viewSettingDiving() {
     _textControllerAscent.text = '${APref.getData(AprefKey.AscentSpeed)}';
     _textControllerDescent.text = '${APref.getData(AprefKey.DescentSpeed)}';
+    _textControllerGasSwitch.text =
+        '${APref.getData(AprefKey.GAS_SWITCH_TIME)}';
 
     return ListView(
       children: [
@@ -231,6 +236,30 @@ class _PageSettingsState extends State<PageSettings> {
                 APref.setData(
                   AprefKey.AscentSpeed,
                   double.parse(_textControllerAscent.text),
+                );
+              }
+              setState(() {});
+            },
+          ),
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text(
+            'GAS Switch Time (min)',
+          ).weight(FontWeight.bold).color(colorMain),
+          trailing: InputText(
+            width: 100,
+            controller: _textControllerGasSwitch,
+            textAlign: TextAlign.center,
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+            ],
+            maxLines: 1,
+            onFieldSubmitted: (value) {
+              if (textIsNotEmpty(_textControllerGasSwitch.text)) {
+                APref.setData(
+                  AprefKey.GAS_SWITCH_TIME,
+                  double.parse(_textControllerGasSwitch.text),
                 );
               }
               setState(() {});

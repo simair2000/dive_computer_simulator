@@ -120,11 +120,12 @@ class DivePlanner2 {
   // final double ascentRate = 10.0;
   // final double descentRate = 20.0;
   final double switchPressureBar = 30.0; // 최소 잔압 임계치
-  final double gasSwitchTimeMinutes = 1.0; // 탱크/가스 교체에 소요되는 시간(분)
 
   DivePlanner2({this.gfLow = 0.40, this.gfHigh = 0.85});
 
   DivePlanResult generatePlan(DivePlanInput input) {
+    final double gasSwitchTimeMinutes =
+        (APref.getData(AprefKey.GAS_SWITCH_TIME) as num?)?.toDouble() ?? 1.0;
     List<String> warnings = [];
     bool isFeasible = true;
     List<DiveStep> profile = [];
@@ -182,15 +183,21 @@ class DivePlanner2 {
                 gasConsumption[currentGas]! + switchGasUsed;
             double switchPO2 =
                 (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
-            currentCns += _getCnsRatePerMinute(switchPO2) * gasSwitchTimeMinutes;
-            currentOTU += _getOtuRatePerMinute(switchPO2) * gasSwitchTimeMinutes;
+            currentCns +=
+                _getCnsRatePerMinute(switchPO2) * gasSwitchTimeMinutes;
+            currentOTU +=
+                _getOtuRatePerMinute(switchPO2) * gasSwitchTimeMinutes;
             totalElapsed += gasSwitchTimeMinutes;
           }
 
           double switchPO2 =
               (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
-          double switchNdl =
-              _calculateNDL(simN2, simHe, currentDepth, currentGas);
+          double switchNdl = _calculateNDL(
+            simN2,
+            simHe,
+            currentDepth,
+            currentGas,
+          );
           double currentCeiling = _calcCeiling(simN2, simHe, gfHigh);
           profile.add(
             DiveStep(
@@ -200,8 +207,8 @@ class DivePlanner2 {
               currentGas,
               gasSwitchTimeMinutes > 0
                   ? gasSwitchTimeMinutes *
-                      input.rmv *
-                      (1.0 + currentDepth / 10.0)
+                        input.rmv *
+                        (1.0 + currentDepth / 10.0)
                   : 0.0,
               pO2: switchPO2,
               cns: currentCns,
@@ -306,7 +313,8 @@ class DivePlanner2 {
                 gasSwitchTimeMinutes,
                 currentGas,
               );
-              double switchGasUsed = gasSwitchTimeMinutes *
+              double switchGasUsed =
+                  gasSwitchTimeMinutes *
                   input.rmv *
                   (1.0 + currentDepth / 10.0);
               gasConsumption[currentGas] =
@@ -330,8 +338,8 @@ class DivePlanner2 {
                 currentGas,
                 gasSwitchTimeMinutes > 0
                     ? gasSwitchTimeMinutes *
-                        input.rmv *
-                        (1.0 + currentDepth / 10.0)
+                          input.rmv *
+                          (1.0 + currentDepth / 10.0)
                     : 0.0,
                 pO2: lastPO2,
                 cns: currentCns,
@@ -412,7 +420,8 @@ class DivePlanner2 {
           );
           double switchGasUsed =
               gasSwitchTimeMinutes * input.rmv * (1.0 + currentDepth / 10.0);
-          gasConsumption[currentGas] = gasConsumption[currentGas]! + switchGasUsed;
+          gasConsumption[currentGas] =
+              gasConsumption[currentGas]! + switchGasUsed;
           double switchPO2 =
               (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
           currentCns += _getCnsRatePerMinute(switchPO2) * gasSwitchTimeMinutes;
@@ -421,8 +430,12 @@ class DivePlanner2 {
         }
 
         double switchPO2 = (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
-        double switchNdl =
-            _calculateNDL(simN2, simHe, currentDepth, currentGas);
+        double switchNdl = _calculateNDL(
+          simN2,
+          simHe,
+          currentDepth,
+          currentGas,
+        );
         double switchCeiling = _calcCeiling(simN2, simHe, gfHigh);
 
         profile.add(
@@ -432,9 +445,7 @@ class DivePlanner2 {
             gasSwitchTimeMinutes,
             currentGas,
             gasSwitchTimeMinutes > 0
-                ? gasSwitchTimeMinutes *
-                    input.rmv *
-                    (1.0 + currentDepth / 10.0)
+                ? gasSwitchTimeMinutes * input.rmv * (1.0 + currentDepth / 10.0)
                 : 0.0,
             pO2: switchPO2,
             cns: currentCns,
@@ -622,15 +633,21 @@ class DivePlanner2 {
                 gasConsumption[currentGas]! + switchGasUsed;
             double switchPO2 =
                 (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
-            currentCns += _getCnsRatePerMinute(switchPO2) * gasSwitchTimeMinutes;
-            currentOTU += _getOtuRatePerMinute(switchPO2) * gasSwitchTimeMinutes;
+            currentCns +=
+                _getCnsRatePerMinute(switchPO2) * gasSwitchTimeMinutes;
+            currentOTU +=
+                _getOtuRatePerMinute(switchPO2) * gasSwitchTimeMinutes;
             totalElapsed += gasSwitchTimeMinutes;
           }
 
           double switchPO2 =
               (1.0 + currentDepth / 10.0) * currentGas.fractionO2;
-          double switchNdl =
-              _calculateNDL(simN2, simHe, currentDepth, currentGas);
+          double switchNdl = _calculateNDL(
+            simN2,
+            simHe,
+            currentDepth,
+            currentGas,
+          );
           double switchCeiling = _calcCeiling(simN2, simHe, gfHigh);
           profile.add(
             DiveStep(
@@ -640,8 +657,8 @@ class DivePlanner2 {
               currentGas,
               gasSwitchTimeMinutes > 0
                   ? gasSwitchTimeMinutes *
-                      input.rmv *
-                      (1.0 + currentDepth / 10.0)
+                        input.rmv *
+                        (1.0 + currentDepth / 10.0)
                   : 0.0,
               pO2: switchPO2,
               cns: currentCns,

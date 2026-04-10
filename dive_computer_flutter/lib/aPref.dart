@@ -7,6 +7,7 @@ enum AprefKey {
   ALWAYS_ON_TOP(false),
   AscentSpeed(10),
   DescentSpeed(18),
+  GAS_SWITCH_TIME(1.0),
   GF_HIGH(0.85),
   GF_LOW(0.4),
   PPO2_BOTTOM(1.4),

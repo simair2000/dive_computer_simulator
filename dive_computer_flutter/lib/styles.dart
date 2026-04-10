@@ -206,7 +206,7 @@ Widget InputText({
       onFieldSubmitted: onFieldSubmitted,
       controller: controller,
       maxLines: maxLines,
-      autofocus: autoFocus ?? true,
+      autofocus: autoFocus ?? false,
       focusNode: focusNode,
       keyboardType: keyboardType,
       decoration: InputDecoration(

@@ -20,6 +20,7 @@ class PagePlanner extends StatefulWidget {
 
 class _PagePlannerState extends State<PagePlanner> {
   final ScrollController _horizontalScrollController = ScrollController();
+  final ScrollController _inputScrollController = ScrollController();
 
   // 멀티레벨 입력용 컨트롤러 및 데이터
   final TextEditingController _textControllerWpDepth = TextEditingController();
@@ -46,10 +47,12 @@ class _PagePlannerState extends State<PagePlanner> {
   final List<Cylinder> cylinders = [];
   DivePlanResult? _planResult;
   int _cylinderPurpose = 0;
+  int _mobileStep = 0;
 
   @override
   void dispose() {
     _horizontalScrollController.dispose();
+    _inputScrollController.dispose();
     _textControllerWpDepth.dispose();
     _textControllerWpTime.dispose();
     _textControllerCylinderHe.dispose();
@@ -440,16 +443,26 @@ class _PagePlannerState extends State<PagePlanner> {
 
       Align(
         alignment: AlignmentGeometry.centerRight,
-        child: IconButton(
+        child: FloatingActionButton.extended(
+          heroTag: 'addCylinderFab',
           tooltip: 'Add Cylinder',
+          backgroundColor: colorMain,
+          foregroundColor: Colors.white,
+          elevation: 3,
           onPressed: () {
             _addCylinder();
           },
-          icon: Icon(Icons.add_circle, color: colorMain, size: 40),
+          icon: const Icon(Icons.add),
+          label: const Text('Add Cylinder'),
         ),
       ),
       horizontalLine(),
     ];
+    final List<Widget> depthPanelContents = leftPanelContents.sublist(0, 5);
+    final List<Widget> cylinderPanelContents = leftPanelContents.sublist(
+      5,
+      leftPanelContents.length,
+    );
 
     // ==============================================================
     // 2. 오른쪽 패널 (결과부) 위젯 리스트
@@ -485,7 +498,21 @@ class _PagePlannerState extends State<PagePlanner> {
     // ==============================================================
     return Scaffold(
       appBar: AppBar(
-        title: Text('Diving Planner').color(Colors.white),
+        title: LayoutBuilder(
+          builder: (context, constraints) {
+            return Align(
+              alignment: Alignment.centerLeft,
+              child: SizedBox(
+                width: constraints.maxWidth,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text('Diving Planner').color(Colors.white),
+                ),
+              ),
+            );
+          },
+        ),
         leading: const Icon(Icons.assignment, color: Colors.white, size: 30),
         backgroundColor: colorMain,
         actions: [
@@ -545,7 +572,10 @@ class _PagePlannerState extends State<PagePlanner> {
                   child: Container(
                     color: colorMain.withAlpha(30),
                     padding: const EdgeInsets.all(20),
-                    child: ListView(children: leftPanelContents),
+                    child: ListView(
+                      controller: _inputScrollController,
+                      children: leftPanelContents,
+                    ),
                   ),
                 ),
                 Expanded(
@@ -562,30 +592,211 @@ class _PagePlannerState extends State<PagePlanner> {
             // [모바일] 세로 스크롤 레이아웃 (Column)
             // ==========================================
             return SingleChildScrollView(
+              controller: _inputScrollController,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Container(
-                    color: colorMain.withAlpha(30),
-                    padding: const EdgeInsets.all(20),
-                    // Column 안에서 ListView 요소들을 렌더링
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: leftPanelContents,
+                    color: colorMain.withAlpha(20),
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: _buildStepArrowButton(
+                            label: '1. Depth',
+                            color: _mobileStep == 0
+                                ? colorMain
+                                : colorMain.withAlpha(120),
+                            onTap: () {
+                              setState(() {
+                                _mobileStep = 0;
+                              });
+                            },
+                            hasLeftNotch: false,
+                            hasRightTip: true,
+                          ).marginOnly(right: 6),
+                        ),
+                        Expanded(
+                          child: _buildStepArrowButton(
+                            label: '2. Cylinder',
+                            color: _mobileStep == 1
+                                ? colorMain
+                                : colorMain.withAlpha(120),
+                            onTap: () {
+                              setState(() {
+                                _mobileStep = 1;
+                              });
+                            },
+                            hasLeftNotch: false,
+                            hasRightTip: true,
+                          ).marginOnly(right: 6),
+                        ),
+                        Expanded(
+                          child: _buildStepArrowButton(
+                            label: '3. Result',
+                            color: _mobileStep == 2
+                                ? Colors.green
+                                : Colors.green.withAlpha(140),
+                            onTap: () {
+                              if (cylinders.isEmpty) {
+                                showSnackbar(
+                                  'Notice',
+                                  'Please add at least one cylinder first.',
+                                );
+                                return;
+                              }
+                              setState(() {
+                                _mobileStep = 2;
+                              });
+                            },
+                            hasLeftNotch: false,
+                            hasRightTip: false,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: rightPanelContents,
+                  if (_mobileStep == 0)
+                    Container(
+                      color: colorMain.withAlpha(30),
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ...depthPanelContents,
+                          // Button(
+                          //   height: 46,
+                          //   color: colorMain,
+                          //   child: const Text(
+                          //     'Done with Depth, go to Cylinder',
+                          //   ).color(Colors.white),
+                          //   onPressed: () {
+                          //     if (waypoints.isEmpty) {
+                          //       showSnackbar(
+                          //         'Notice',
+                          //         'Please add at least one waypoint.',
+                          //       );
+                          //       return;
+                          //     }
+                          //     setState(() {
+                          //       _mobileStep = 1;
+                          //     });
+                          //   },
+                          // ),
+                        ],
+                      ),
                     ),
-                  ),
+                  if (_mobileStep == 1)
+                    Container(
+                      color: colorMain.withAlpha(30),
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ...cylinderPanelContents,
+                          Text('Cylinder List')
+                              .weight(FontWeight.bold)
+                              .color(colorMain)
+                              .marginOnly(bottom: 10),
+                          _cylinderList().marginOnly(bottom: 12),
+                          // Row(
+                          //   children: [
+                          //     Expanded(
+                          //       child: Button(
+                          //         height: 46,
+                          //         color: Colors.grey,
+                          //         child: const Text('Back').color(Colors.white),
+                          //         onPressed: () {
+                          //           setState(() {
+                          //             _mobileStep = 0;
+                          //           });
+                          //         },
+                          //       ).marginOnly(right: 8),
+                          //     ),
+                          //     Expanded(
+                          //       child: Button(
+                          //         height: 46,
+                          //         color: colorMain,
+                          //         child: const Text(
+                          //           'Done with Cylinder, view Result',
+                          //         ).color(Colors.white),
+                          //         onPressed: () {
+                          //           if (cylinders.isEmpty) {
+                          //             showSnackbar(
+                          //               'Notice',
+                          //               'Please add at least one cylinder.',
+                          //             );
+                          //             return;
+                          //           }
+                          //           setState(() {
+                          //             _mobileStep = 2;
+                          //           });
+                          //         },
+                          //       ),
+                          //     ),
+                          //   ],
+                          // ),
+                        ],
+                      ),
+                    ),
+                  if (_mobileStep == 2)
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Row(
+                          //   children: [
+                          //     Expanded(
+                          //       child: Button(
+                          //         height: 42,
+                          //         color: Colors.grey,
+                          //         child: const Text(
+                          //           'Go to Cylinder Step',
+                          //         ).color(Colors.white),
+                          //         onPressed: () {
+                          //           setState(() {
+                          //             _mobileStep = 1;
+                          //           });
+                          //         },
+                          //       ),
+                          //     ),
+                          //   ],
+                          // ).marginOnly(bottom: 12),
+                          ...rightPanelContents,
+                        ],
+                      ),
+                    ),
                 ],
               ),
             );
           }
         },
+      ),
+    );
+  }
+
+  Widget _buildStepArrowButton({
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+    required bool hasLeftNotch,
+    required bool hasRightTip,
+  }) {
+    return SizedBox(
+      height: 40,
+      child: ClipPath(
+        clipper: _StepArrowClipper(
+          hasLeftNotch: hasLeftNotch,
+          hasRightTip: hasRightTip,
+        ),
+        child: Material(
+          color: color,
+          child: InkWell(
+            onTap: onTap,
+            child: Center(child: Text(label).color(Colors.white).size(12)),
+          ),
+        ),
       ),
     );
   }
@@ -663,22 +874,23 @@ class _PagePlannerState extends State<PagePlanner> {
     setState(() {
       cylinders.add(cylinder);
     });
+    scrollToEnd(_inputScrollController);
   }
 
   Widget _cylinderList() {
-    return SizedBox(
-      height: 120,
-      child: Scrollbar(
+    if (cylinders.isEmpty) return const SizedBox.shrink();
+
+    return Scrollbar(
+      controller: _horizontalScrollController,
+      thumbVisibility: GetPlatform.isWindows,
+      thickness: 8.0,
+      radius: const Radius.circular(10),
+      child: SingleChildScrollView(
         controller: _horizontalScrollController,
-        thumbVisibility: GetPlatform.isWindows,
-        thickness: 8.0,
-        radius: const Radius.circular(10),
-        child: ListView.builder(
-          shrinkWrap: true,
-          controller: _horizontalScrollController,
-          scrollDirection: Axis.horizontal,
-          itemCount: cylinders.length,
-          itemBuilder: (context, index) {
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: List.generate(cylinders.length, (index) {
             Cylinder cylinder = cylinders[index];
             double consumption = _planResult?.gasConsumption[cylinder] ?? 0;
             int remainingPressure =
@@ -768,7 +980,7 @@ class _PagePlannerState extends State<PagePlanner> {
                 ],
               ),
             ).marginOnly(right: 10);
-          },
+          }),
         ),
       ),
     );
@@ -776,6 +988,9 @@ class _PagePlannerState extends State<PagePlanner> {
 
   Widget _divePlanResult() {
     if (_planResult == null) return Container();
+    final List<DiveStep> timelineProfile = _planResult!.isFeasible
+        ? _collapsedMovementSteps(_planResult!.profile)
+        : [];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -816,17 +1031,72 @@ class _PagePlannerState extends State<PagePlanner> {
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             itemCount: _planResult!.isFeasible
-                ? _planResult!.profile.length
+                ? timelineProfile.length
                 : _planResult!.warnings.length,
             itemBuilder: (context, index) {
               return _planResult!.isFeasible
-                  ? _buildProfileStepCard(_planResult!.profile[index])
+                  ? _buildProfileStepCard(
+                      timelineProfile[index],
+                      startDepth: index == 0
+                          ? 0
+                          : timelineProfile[index - 1].depth,
+                    )
                   : _buildWarningCard(_planResult!.warnings[index]);
             },
           ),
         ),
       ],
     );
+  }
+
+  List<DiveStep> _collapsedMovementSteps(List<DiveStep> profile) {
+    final List<DiveStep> collapsed = [];
+    DiveStep? pendingMovement;
+
+    bool isMovement(DiveStep step) =>
+        step.phase == 'Descent' || step.phase == 'Ascent';
+
+    void flushPending() {
+      if (pendingMovement != null) {
+        collapsed.add(pendingMovement!);
+        pendingMovement = null;
+      }
+    }
+
+    for (final step in profile) {
+      if (!isMovement(step)) {
+        flushPending();
+        collapsed.add(step);
+        continue;
+      }
+
+      if (pendingMovement == null) {
+        pendingMovement = step;
+        continue;
+      }
+
+      if (pendingMovement?.phase == step.phase) {
+        pendingMovement = DiveStep(
+          step.phase,
+          step.depth,
+          (pendingMovement?.time ?? 0) + step.time,
+          step.gasUsed,
+          (pendingMovement?.gasConsumedLiters ?? 0) + step.gasConsumedLiters,
+          pO2: step.pO2,
+          cns: step.cns,
+          otu: step.otu,
+          ndl: step.ndl,
+          ceiling: step.ceiling,
+        );
+        continue;
+      }
+
+      flushPending();
+      pendingMovement = step;
+    }
+
+    flushPending();
+    return collapsed;
   }
 
   Widget _buildWarningCard(String warning) {
@@ -850,10 +1120,15 @@ class _PagePlannerState extends State<PagePlanner> {
     );
   }
 
-  Widget _buildProfileStepCard(DiveStep profile) {
+  Widget _buildProfileStepCard(DiveStep profile, {int? startDepth}) {
     IconData stepIcon = Icons.arrow_downward;
     Color stepColor = colorMain;
     String phaseName = profile.phase;
+    final bool isMovement =
+        profile.phase == 'Descent' || profile.phase == 'Ascent';
+    final String depthLabel = isMovement && startDepth != null
+        ? '${startDepth}m -> ${profile.depth}m'
+        : '${profile.depth}m';
 
     switch (profile.phase) {
       case 'Descent':
@@ -924,7 +1199,7 @@ class _PagePlannerState extends State<PagePlanner> {
                       Row(
                         children: [
                           Text(
-                            '${profile.depth}m',
+                            depthLabel,
                           ).size(20).weight(FontWeight.bold).color(colorMain),
                           const SizedBox(width: 10),
                           Text(
@@ -1184,6 +1459,48 @@ class _PagePlannerState extends State<PagePlanner> {
         ],
       ),
     );
+  }
+}
+
+class _StepArrowClipper extends CustomClipper<Path> {
+  final bool hasLeftNotch;
+  final bool hasRightTip;
+
+  _StepArrowClipper({required this.hasLeftNotch, required this.hasRightTip});
+
+  @override
+  Path getClip(Size size) {
+    final Path path = Path();
+    final double tipWidth = 14;
+    final double notchWidth = 10;
+
+    final double leftX = hasLeftNotch ? notchWidth : 0;
+    final double rightBodyX = hasRightTip ? size.width - tipWidth : size.width;
+
+    path.moveTo(leftX, 0);
+    path.lineTo(rightBodyX, 0);
+
+    if (hasRightTip) {
+      path.lineTo(size.width, size.height / 2);
+      path.lineTo(rightBodyX, size.height);
+    } else {
+      path.lineTo(rightBodyX, size.height);
+    }
+
+    path.lineTo(leftX, size.height);
+
+    if (hasLeftNotch) {
+      path.lineTo(0, size.height / 2);
+    }
+
+    path.close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(covariant _StepArrowClipper oldClipper) {
+    return oldClipper.hasLeftNotch != hasLeftNotch ||
+        oldClipper.hasRightTip != hasRightTip;
   }
 }
 

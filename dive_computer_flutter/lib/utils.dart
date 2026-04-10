@@ -49,12 +49,13 @@ void scrollToEnd(ScrollController controller) {
 }
 
 void showSnackbar(String title, String message) {
+  final double horizontalMargin = (Get.width * 0.06).clamp(12.0, 150.0);
   Get.snackbar(
     title,
     message,
     backgroundColor: Colors.black.withAlpha(150),
     colorText: Colors.white,
-    margin: EdgeInsets.symmetric(horizontal: 150, vertical: 20),
+    margin: EdgeInsets.symmetric(horizontal: horizontalMargin, vertical: 20),
     snackPosition: SnackPosition.BOTTOM,
   );
 }
