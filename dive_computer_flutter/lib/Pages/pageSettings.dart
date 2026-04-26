@@ -116,7 +116,21 @@ class _PageSettingsState extends State<PageSettings> {
     // 3. 반응형 스캐폴드 렌더링
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Settings').color(Colors.white),
+        title: LayoutBuilder(
+          builder: (context, constraints) {
+            return Align(
+              alignment: Alignment.centerLeft,
+              child: SizedBox(
+                width: constraints.maxWidth,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text('Settings').color(Colors.white),
+                ),
+              ),
+            );
+          },
+        ),
         iconTheme: const IconThemeData(color: Colors.white),
         backgroundColor: colorMain,
       ),
@@ -202,6 +216,7 @@ class _PageSettingsState extends State<PageSettings> {
           trailing: InputText(
             width: 100, // 모바일에서도 삐져나가지 않게 너비 축소
             controller: _textControllerDescent,
+            keyboardType: TextInputType.numberWithOptions(decimal: true),
             textAlign: TextAlign.center,
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
@@ -226,6 +241,7 @@ class _PageSettingsState extends State<PageSettings> {
           trailing: InputText(
             width: 100,
             controller: _textControllerAscent,
+            keyboardType: TextInputType.numberWithOptions(decimal: true),
             textAlign: TextAlign.center,
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
@@ -250,6 +266,7 @@ class _PageSettingsState extends State<PageSettings> {
           trailing: InputText(
             width: 100,
             controller: _textControllerGasSwitch,
+            keyboardType: TextInputType.numberWithOptions(decimal: true),
             textAlign: TextAlign.center,
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),

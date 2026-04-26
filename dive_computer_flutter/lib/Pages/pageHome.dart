@@ -56,7 +56,21 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Diving Simulator').color(Colors.white),
+        title: LayoutBuilder(
+          builder: (context, constraints) {
+            return Align(
+              alignment: Alignment.centerLeft,
+              child: SizedBox(
+                width: constraints.maxWidth,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text('Diving Simulator').color(Colors.white),
+                ),
+              ),
+            );
+          },
+        ),
         leading: const Icon(Icons.scuba_diving, color: Colors.white, size: 30),
         backgroundColor: colorMain,
         actions: [
@@ -217,6 +231,9 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                   child: InputText(
                     controller: _textControllerDepth,
                     textAlign: TextAlign.center,
+                    keyboardType: TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
                     ],
@@ -274,6 +291,9 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                   child: InputText(
                     controller: _textControllerEAN,
                     textAlign: TextAlign.center,
+                    keyboardType: TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(r'^\d{0,3}$')),
                     ],
@@ -299,6 +319,9 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
                   child: InputText(
                     controller: _textControllerHe,
                     textAlign: TextAlign.center,
+                    keyboardType: TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(r'^\d{0,2}$')),
                     ],

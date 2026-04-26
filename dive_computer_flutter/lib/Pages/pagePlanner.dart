@@ -105,6 +105,9 @@ class _PagePlannerState extends State<PagePlanner> {
                 Expanded(
                   child: InputText(
                     controller: _textControllerWpDepth,
+                    keyboardType: TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     textAlign: TextAlign.center,
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
@@ -115,6 +118,9 @@ class _PagePlannerState extends State<PagePlanner> {
                 Expanded(
                   child: InputText(
                     controller: _textControllerWpTime,
+                    keyboardType: TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     textAlign: TextAlign.center,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     maxLines: 1,
@@ -211,6 +217,7 @@ class _PagePlannerState extends State<PagePlanner> {
             child: InputText(
               width: 100,
               controller: _textControllerRMV,
+              keyboardType: TextInputType.numberWithOptions(decimal: true),
               textAlign: TextAlign.center,
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
@@ -356,6 +363,7 @@ class _PagePlannerState extends State<PagePlanner> {
             child: InputText(
               controller: _textControllerCylinderVolume,
               textAlign: TextAlign.center,
+              keyboardType: TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
               ],
@@ -371,6 +379,7 @@ class _PagePlannerState extends State<PagePlanner> {
             child: InputText(
               controller: _textControllerCylinderStartPressure,
               textAlign: TextAlign.center,
+              keyboardType: TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
               ],
@@ -420,6 +429,7 @@ class _PagePlannerState extends State<PagePlanner> {
             child: InputText(
               controller: _textControllerCylinderO2,
               textAlign: TextAlign.center,
+              keyboardType: TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'^\d{0,3}$')),
               ],
@@ -432,6 +442,7 @@ class _PagePlannerState extends State<PagePlanner> {
             child: InputText(
               controller: _textControllerCylinderHe,
               textAlign: TextAlign.center,
+              keyboardType: TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'^\d{0,2}$')),
               ],

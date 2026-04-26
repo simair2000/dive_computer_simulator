@@ -177,7 +177,21 @@ class _PageErdpState extends State<PageErdp> {
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
-        title: const Text('eRDPml Calculator').color(Colors.white),
+        title: LayoutBuilder(
+          builder: (context, constraints) {
+            return Align(
+              alignment: Alignment.centerLeft,
+              child: SizedBox(
+                width: constraints.maxWidth,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text('eRDPml Calculator').color(Colors.white),
+                ),
+              ),
+            );
+          },
+        ),
         backgroundColor: colorMain,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
@@ -352,6 +366,9 @@ class _PageErdpState extends State<PageErdp> {
                       InputText(
                         controller: node.depthCtrl,
                         textAlign: TextAlign.center,
+                        keyboardType: TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
                         inputFormatters: [
                           FilteringTextInputFormatter.allow(
                             RegExp(r'^\d*\.?\d*$'),
@@ -373,6 +390,9 @@ class _PageErdpState extends State<PageErdp> {
                       const SizedBox(height: 5),
                       InputText(
                         controller: node.timeCtrl,
+                        keyboardType: TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
                         textAlign: TextAlign.center,
                         inputFormatters: [
                           FilteringTextInputFormatter.digitsOnly,
@@ -485,6 +505,9 @@ class _PageErdpState extends State<PageErdp> {
                   child: InputText(
                     controller: node.timeCtrl,
                     textAlign: TextAlign.center,
+                    keyboardType: TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     maxLines: 1,
                   ),
