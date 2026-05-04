@@ -6,11 +6,13 @@ import 'package:dive_computer_flutter/hiveHelper.dart';
 import 'package:dive_computer_flutter/router.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized();
 
   if (GetPlatform.isWindows) {
     await windowManager.ensureInitialized();

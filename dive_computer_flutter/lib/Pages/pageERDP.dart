@@ -192,6 +192,12 @@ class _PageErdpState extends State<PageErdp> {
             );
           },
         ),
+        leading: IconButton(
+          icon: Icon(Icons.home, color: Colors.white, size: 30),
+          onPressed: () {
+            context.goNamed(RoutePage.splash.name);
+          },
+        ),
         backgroundColor: colorMain,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [

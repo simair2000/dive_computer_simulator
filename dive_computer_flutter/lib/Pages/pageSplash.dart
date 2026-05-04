@@ -95,6 +95,30 @@ class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
                         onPressed: () {
                           context.goNamed(RoutePage.eRDP.name);
                         },
+                      ).marginOnly(bottom: 10),
+                      Button(
+                        width: 200,
+                        height: 50,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.photo_camera,
+                              color: Colors.white,
+                            ).marginOnly(right: 5),
+                            Text('Video correction').color(Colors.white),
+                          ],
+                        ),
+                        onPressed: () {
+                          GetPlatform.isWindows
+                              ? context.goNamed(RoutePage.video_correction.name)
+                              : Get.snackbar(
+                                  'Unsupported Platform',
+                                  'Video correction is only available on Windows.',
+                                  backgroundColor: Colors.red,
+                                  colorText: Colors.white,
+                                );
+                        },
                       ),
                     ],
                   ).marginSymmetric(horizontal: 20)

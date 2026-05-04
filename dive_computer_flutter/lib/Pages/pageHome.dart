@@ -71,7 +71,12 @@ class _PageHomeState extends State<PageHome> with AfterLayoutMixin {
             );
           },
         ),
-        leading: const Icon(Icons.scuba_diving, color: Colors.white, size: 30),
+        leading: IconButton(
+          icon: Icon(Icons.home, color: Colors.white, size: 30),
+          onPressed: () {
+            context.goNamed(RoutePage.splash.name);
+          },
+        ),
         backgroundColor: colorMain,
         actions: [
           IconButton(

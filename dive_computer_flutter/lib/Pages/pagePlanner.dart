@@ -524,7 +524,12 @@ class _PagePlannerState extends State<PagePlanner> {
             );
           },
         ),
-        leading: const Icon(Icons.assignment, color: Colors.white, size: 30),
+        leading: IconButton(
+          icon: Icon(Icons.home, color: Colors.white, size: 30),
+          onPressed: () {
+            context.goNamed(RoutePage.splash.name);
+          },
+        ),
         backgroundColor: colorMain,
         actions: [
           IconButton(

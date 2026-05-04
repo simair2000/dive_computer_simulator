@@ -3,6 +3,7 @@ import 'package:dive_computer_flutter/Pages/pageHome.dart';
 import 'package:dive_computer_flutter/Pages/pagePlanner.dart';
 import 'package:dive_computer_flutter/Pages/pageSettings.dart';
 import 'package:dive_computer_flutter/Pages/pageSplash.dart';
+import 'package:dive_computer_flutter/Pages/pageVideoCorrection.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:go_router/go_router.dart';
@@ -12,6 +13,7 @@ enum RoutePage {
   home('/home'),
   planner('/planner'),
   eRDP('/erdp'),
+  video_correction('/video_correction'),
   settings('/settings');
 
   const RoutePage(this.path);
@@ -48,6 +50,12 @@ final GoRouter router = GoRouter(
       name: RoutePage.eRDP.name,
       path: RoutePage.eRDP.path,
       pageBuilder: (context, state) => NoTransitionPage(child: PageErdp()),
+    ),
+    GoRoute(
+      name: RoutePage.video_correction.name,
+      path: RoutePage.video_correction.path,
+      pageBuilder: (context, state) =>
+          NoTransitionPage(child: PageVideoCorrection()),
     ),
   ],
 );
