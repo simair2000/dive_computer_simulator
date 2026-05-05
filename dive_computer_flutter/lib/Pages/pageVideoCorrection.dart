@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:dive_computer_flutter/aPref.dart';
 import 'package:dive_computer_flutter/define.dart';
 import 'package:dive_computer_flutter/extensions.dart';
 import 'package:dive_computer_flutter/router.dart';
@@ -42,6 +43,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   bool _isPlaying = false;
   bool _isPaused = false;
   bool _isSaving = false;
+  String _exportQuality = 'Original'; // 'Original', 'HD', 'FullHD', '2K', '4K'
   bool _isFullscreen = false;
   bool _processingFrame = false;
   int _playbackSession = 0;
@@ -52,6 +54,11 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   SendPort? _isolateSendPort;
   ReceivePort? _fromIsolatePort;
   StreamSubscription<dynamic>? _isolateSub;
+
+  // Save isolate state
+  Isolate? _saveIsolate;
+  ReceivePort? _fromSaveIsolatePort;
+  StreamSubscription<dynamic>? _saveIsolateSub;
   int _lastReceivedFrameNum = 0;
   int _lastReceivedPosMs = 0;
   int _totalFrames = 0;
@@ -62,6 +69,14 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   int _playlistIndex = -1;
 
   bool _isAnalysing = false;
+
+  void _setCurrentFrame(ui.Image? image) {
+    final previous = _currentFrame;
+    _currentFrame = image;
+    if (previous != null && !identical(previous, image)) {
+      previous.dispose();
+    }
+  }
 
   bool _autoCorrection = true;
   double _autoStrength = 0.62;
@@ -88,10 +103,34 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   bool get _hasNextPlaylistFile =>
       _playlistIndex >= 0 && _playlistIndex < _playlistPaths.length - 1;
 
+  void _loadSavedSettings() {
+    _autoCorrection = APref.getData(AprefKey.VC_AUTO_CORRECTION);
+    _autoStrength = APref.getData(AprefKey.VC_AUTO_STRENGTH);
+    _contrast = APref.getData(AprefKey.VC_CONTRAST);
+    _brightness = APref.getData(AprefKey.VC_BRIGHTNESS);
+    _saturation = APref.getData(AprefKey.VC_SATURATION);
+    _temperature = APref.getData(AprefKey.VC_TEMPERATURE);
+    _redRecovery = APref.getData(AprefKey.VC_RED_RECOVERY);
+    _greenWaterAutoCorrection = APref.getData(
+      AprefKey.VC_GREEN_WATER_AUTO_CORRECTION,
+    );
+    _greenWaterStrength = APref.getData(AprefKey.VC_GREEN_WATER_STRENGTH);
+    _localMaskEnabled = APref.getData(AprefKey.VC_LOCAL_MASK_ENABLED);
+    _localMaskStrength = APref.getData(AprefKey.VC_LOCAL_MASK_STRENGTH);
+    _blueOceanTone = APref.getData(AprefKey.VC_BLUE_OCEAN_TONE);
+    _particleReduction = APref.getData(AprefKey.VC_PARTICLE_REDUCTION);
+    _particleReductionStrength = APref.getData(
+      AprefKey.VC_PARTICLE_REDUCTION_STRENGTH,
+    );
+    _audioVolume = APref.getData(AprefKey.VC_AUDIO_VOLUME);
+  }
+
   @override
   void initState() {
     super.initState();
+    _loadSavedSettings();
     mk.MediaKit.ensureInitialized();
+    unawaited(_clearTemporaryCacheDirectory());
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _resetControlsHideTimer(),
     );
@@ -178,7 +217,42 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     );
   }
 
+  /// Deletes `_openedSrcPath` if it is a temporary copy (input_* in cache dir).
+  Future<void> _deleteTempInputIfNeeded() async {
+    final prev = _openedSrcPath;
+    if (prev == null) return;
+    final name = p.basename(prev);
+    if (!name.startsWith('input_')) return;
+    try {
+      final f = File(prev);
+      if (await f.exists()) {
+        await f.delete();
+        debugPrint('Deleted temp input copy: $prev');
+      }
+    } catch (e) {
+      debugPrint('Failed to delete temp input: $e');
+    }
+  }
+
+  Future<void> _clearTemporaryCacheDirectory() async {
+    try {
+      final cacheDir = await getApplicationCacheDirectory();
+      if (!await cacheDir.exists()) return;
+
+      await for (final entity in cacheDir.list(followLinks: false)) {
+        try {
+          await entity.delete(recursive: true);
+        } catch (e) {
+          debugPrint('Failed to delete temp entity ${entity.path}: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to clear temporary cache directory: $e');
+    }
+  }
+
   Future<bool> _openVideoCapture(String path) async {
+    await _deleteTempInputIfNeeded();
     vc.release();
 
     final preparedPath = await _prepareOpenPath(path);
@@ -242,7 +316,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     // Show loading state immediately before the blocking vc.open() call.
     setState(() {
       src = path;
-      _currentFrame = null;
+      _setCurrentFrame(null);
       _isPaused = false;
       _isAnalysing = true;
       _statusText = 'Opening video...';
@@ -287,7 +361,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         rawFrame.dispose();
         if (mounted) {
           setState(() {
-            _currentFrame = rawImage;
+            _setCurrentFrame(rawImage);
           });
         }
       } else {
@@ -634,16 +708,19 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     if (!realtime && (saturation - 1.0).abs() > 0.01) {
       final hsv = await cv.cvtColorAsync(working, cv.COLOR_BGR2HSV);
       final hsvChannels = await cv.splitAsync(hsv);
-      final satAdjusted = await cv.convertScaleAbsAsync(
-        hsvChannels[1],
-        alpha: saturation,
-      );
+      final hCh = hsvChannels[0];
+      final sCh = hsvChannels[1];
+      final vCh = hsvChannels[2];
+      final satAdjusted = await cv.convertScaleAbsAsync(sCh, alpha: saturation);
       final hsvMerged = await cv.mergeAsync(
-        cv.VecMat.fromList([hsvChannels[0], satAdjusted, hsvChannels[2]]),
+        cv.VecMat.fromList([hCh, satAdjusted, vCh]),
       );
       final saturatedBgr = await cv.cvtColorAsync(hsvMerged, cv.COLOR_HSV2BGR);
 
       satAdjusted.dispose();
+      hCh.dispose();
+      sCh.dispose();
+      vCh.dispose();
       hsvMerged.dispose();
       hsv.dispose();
       working.dispose();
@@ -654,14 +731,20 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       // In realtime mode, just scale the blue channel directly (no masking).
       if (realtime) {
         final bgrChannels = await cv.splitAsync(working);
+        final bBaseChannel = bgrChannels[0];
+        final gBaseChannel = bgrChannels[1];
+        final rBaseChannel = bgrChannels[2];
         final bScaled = await cv.convertScaleAbsAsync(
-          bgrChannels[0],
+          bBaseChannel,
           alpha: _blueOceanTone,
         );
         final blued = await cv.mergeAsync(
-          cv.VecMat.fromList([bScaled, bgrChannels[1], bgrChannels[2]]),
+          cv.VecMat.fromList([bScaled, gBaseChannel, rBaseChannel]),
         );
         bScaled.dispose();
+        bBaseChannel.dispose();
+        gBaseChannel.dispose();
+        rBaseChannel.dispose();
         working.dispose();
         working = blued;
       } else {
@@ -713,6 +796,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         bBase.dispose();
         bMaskedBoost.dispose();
         bFinal.dispose();
+        b.dispose();
+        g.dispose();
+        r.dispose();
         working.dispose();
         working = blued;
       } // end else (full masking path)
@@ -843,7 +929,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         return;
       }
       setState(() {
-        _currentFrame = image;
+        _setCurrentFrame(image);
         _isAnalysing = false;
         _statusText = 'Video ready';
       });
@@ -914,7 +1000,11 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
           final image = await _cvMatToImage(corrected);
           frame.dispose();
           corrected.dispose();
-          if (mounted) setState(() => _currentFrame = image);
+          if (mounted) {
+            setState(() => _setCurrentFrame(image));
+          } else {
+            image.dispose();
+          }
         } else {
           frame.dispose();
         }
@@ -966,170 +1056,113 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     }
   }
 
-  Future<bool> _muxOriginalAudioToVideo({
-    required String silentVideoPath,
-    required String sourceWithAudioPath,
-    required String outputPath,
-  }) async {
-    String psQuote(String value) => value.replaceAll("'", "''");
+  Future<void> _saveSettings() async {
+    await APref.setData(AprefKey.VC_AUTO_CORRECTION, _autoCorrection);
+    await APref.setData(AprefKey.VC_AUTO_STRENGTH, _autoStrength);
+    await APref.setData(AprefKey.VC_CONTRAST, _contrast);
+    await APref.setData(AprefKey.VC_BRIGHTNESS, _brightness);
+    await APref.setData(AprefKey.VC_SATURATION, _saturation);
+    await APref.setData(AprefKey.VC_TEMPERATURE, _temperature);
+    await APref.setData(AprefKey.VC_RED_RECOVERY, _redRecovery);
+    await APref.setData(
+      AprefKey.VC_GREEN_WATER_AUTO_CORRECTION,
+      _greenWaterAutoCorrection,
+    );
+    await APref.setData(AprefKey.VC_GREEN_WATER_STRENGTH, _greenWaterStrength);
+    await APref.setData(AprefKey.VC_LOCAL_MASK_ENABLED, _localMaskEnabled);
+    await APref.setData(AprefKey.VC_LOCAL_MASK_STRENGTH, _localMaskStrength);
+    await APref.setData(AprefKey.VC_BLUE_OCEAN_TONE, _blueOceanTone);
+    await APref.setData(AprefKey.VC_PARTICLE_REDUCTION, _particleReduction);
+    await APref.setData(
+      AprefKey.VC_PARTICLE_REDUCTION_STRENGTH,
+      _particleReductionStrength,
+    );
+    await APref.setData(AprefKey.VC_AUDIO_VOLUME, _audioVolume);
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Settings saved.')));
+    }
+  }
 
-    Future<bool> canRun(String executable) async {
-      try {
-        final r = await Process.run(executable, ['-version'], runInShell: true);
-        return r.exitCode == 0;
-      } catch (_) {
-        return false;
+  /// Shows a dialog to pick export quality. Returns the chosen quality string,
+  /// or null if the user cancelled.
+  Future<String?> _showExportQualityDialog(int srcW, int srcH) async {
+    const qualities = ['Original', 'HD', 'FullHD', '2K', '4K'];
+    const labels = {
+      'Original': '원본 해상도',
+      'HD': 'HD  (1280×720)',
+      'FullHD': 'Full HD  (1920×1080)',
+      '2K': '2K  (2560×1440)',
+      '4K': '4K  (3840×2160)',
+    };
+
+    // Map quality → target height for preview
+    int targetH(String q) {
+      switch (q) {
+        case 'HD':
+          return 720;
+        case 'FullHD':
+          return 1080;
+        case '2K':
+          return 1440;
+        case '4K':
+          return 2160;
+        default:
+          return srcH;
       }
     }
 
-    Future<String?> tryInstallPortableFfmpeg() async {
-      if (!Platform.isWindows) return null;
-      try {
-        final supportDir = await getApplicationSupportDirectory();
-        final installBinDir = Directory(
-          p.join(supportDir.path, 'ffmpeg_portable', 'bin'),
+    String resolution(String q) {
+      if (q == 'Original') return '${srcW}×$srcH';
+      final th = targetH(q);
+      if (th >= srcH) return '${srcW}×$srcH (원본 유지)';
+      final tw = ((srcW * th / srcH).round() ~/ 2) * 2;
+      return '${tw}×$th';
+    }
+
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        String selected = _exportQuality;
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: const Text('저장 화질 선택'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: qualities.map((q) {
+                  return RadioListTile<String>(
+                    title: Text(labels[q]!),
+                    subtitle: Text(
+                      resolution(q),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    value: q,
+                    groupValue: selected,
+                    dense: true,
+                    onChanged: (v) => setLocal(() => selected = v!),
+                  );
+                }).toList(),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('취소'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() => _exportQuality = selected);
+                    Navigator.of(ctx).pop(selected);
+                  },
+                  child: const Text('확인'),
+                ),
+              ],
+            );
+          },
         );
-        final installedExe = p.join(installBinDir.path, 'ffmpeg.exe');
-        if (File(installedExe).existsSync() && await canRun(installedExe)) {
-          return installedExe;
-        }
-
-        await installBinDir.create(recursive: true);
-        final tempRoot = Directory(
-          p.join(supportDir.path, 'ffmpeg_download_tmp'),
-        );
-        if (tempRoot.existsSync()) {
-          await tempRoot.delete(recursive: true);
-        }
-        await tempRoot.create(recursive: true);
-
-        final zipPath = p.join(tempRoot.path, 'ffmpeg.zip');
-        final extractPath = p.join(tempRoot.path, 'extracted');
-        const url =
-            'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
-        final script =
-            "\$ErrorActionPreference='Stop'; "
-            "\$ProgressPreference='SilentlyContinue'; "
-            "Invoke-WebRequest -Uri '${psQuote(url)}' -OutFile '${psQuote(zipPath)}'; "
-            "Expand-Archive -Path '${psQuote(zipPath)}' -DestinationPath '${psQuote(extractPath)}' -Force;";
-
-        final download = await Process.run('powershell', [
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-Command',
-          script,
-        ], runInShell: true);
-        if (download.exitCode != 0) {
-          debugPrint('Portable ffmpeg download failed: ${download.stderr}');
-          return null;
-        }
-
-        File? foundExe;
-        await for (final entity in Directory(
-          extractPath,
-        ).list(recursive: true, followLinks: false)) {
-          if (entity is! File) continue;
-          if (p.basename(entity.path).toLowerCase() != 'ffmpeg.exe') continue;
-          if (p.basename(p.dirname(entity.path)).toLowerCase() != 'bin') {
-            continue;
-          }
-          foundExe = entity;
-          break;
-        }
-        if (foundExe == null) {
-          debugPrint('Portable ffmpeg extracted but ffmpeg.exe not found.');
-          return null;
-        }
-
-        final sourceBin = Directory(p.dirname(foundExe.path));
-        await for (final entity in sourceBin.list(followLinks: false)) {
-          final name = p.basename(entity.path);
-          final target = p.join(installBinDir.path, name);
-          if (entity is File) {
-            await entity.copy(target);
-          }
-        }
-
-        if (File(installedExe).existsSync() && await canRun(installedExe)) {
-          return installedExe;
-        }
-      } catch (e) {
-        debugPrint('Portable ffmpeg install exception: $e');
-      }
-      return null;
-    }
-
-    Future<String?> resolveFfmpegExecutable() async {
-      if (await canRun('ffmpeg')) {
-        return 'ffmpeg';
-      }
-
-      final exeDir = p.dirname(Platform.resolvedExecutable);
-      final candidates = <String>[
-        p.join(Directory.current.path, 'ffmpeg.exe'),
-        p.join(Directory.current.path, 'tools', 'ffmpeg', 'ffmpeg.exe'),
-        p.join(Directory.current.path, 'ffmpeg', 'bin', 'ffmpeg.exe'),
-        p.join(exeDir, 'ffmpeg.exe'),
-        p.join(exeDir, 'ffmpeg', 'ffmpeg.exe'),
-        p.join(exeDir, 'ffmpeg', 'bin', 'ffmpeg.exe'),
-        p.join(
-          exeDir,
-          'data',
-          'flutter_assets',
-          'assets',
-          'ffmpeg',
-          'ffmpeg.exe',
-        ),
-      ];
-
-      for (final c in candidates) {
-        if (!File(c).existsSync()) continue;
-        if (await canRun(c)) {
-          return c;
-        }
-      }
-
-      final portable = await tryInstallPortableFfmpeg();
-      if (portable != null) {
-        return portable;
-      }
-      return null;
-    }
-
-    try {
-      final ffmpegExe = await resolveFfmpegExecutable();
-      if (ffmpegExe == null) {
-        debugPrint('ffmpeg executable not found (system or bundled).');
-        return false;
-      }
-
-      final result = await Process.run(ffmpegExe, [
-        '-y',
-        '-i',
-        silentVideoPath,
-        '-i',
-        sourceWithAudioPath,
-        '-map',
-        '0:v:0',
-        '-map',
-        '1:a:0?',
-        '-c:v',
-        'copy',
-        '-c:a',
-        'aac',
-        '-shortest',
-        outputPath,
-      ], runInShell: true);
-      if (result.exitCode != 0) {
-        debugPrint('ffmpeg mux failed: ${result.stderr}');
-        return false;
-      }
-      return true;
-    } catch (e) {
-      debugPrint('ffmpeg mux exception: $e');
-      return false;
-    }
+      },
+    );
   }
 
   Future<void> _saveEditedVideo() async {
@@ -1146,6 +1179,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       _saveProgress = 0;
       _statusText = 'Preparing export...';
     });
+    await _killPlaybackIsolate();
     await _stopAudioPlayback();
 
     final exportCapture = cv.VideoCapture.fromFile(_openedSrcPath!);
@@ -1164,6 +1198,37 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     final srcH = exportCapture.get(cv.CAP_PROP_FRAME_HEIGHT).toInt();
     final srcFps = exportCapture.get(cv.CAP_PROP_FPS);
     final totalFrames = exportCapture.get(cv.CAP_PROP_FRAME_COUNT).toInt();
+
+    // Show quality selection dialog
+    final quality = await _showExportQualityDialog(srcW, srcH);
+    if (quality == null) {
+      exportCapture.dispose();
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+          _statusText = 'Export cancelled.';
+        });
+      }
+      return;
+    }
+
+    // Compute target resolution (maintain aspect ratio, never upscale)
+    int outH;
+    switch (quality) {
+      case 'HD':
+        outH = 720;
+      case 'FullHD':
+        outH = 1080;
+      case '2K':
+        outH = 1440;
+      case '4K':
+        outH = 2160;
+      default:
+        outH = srcH;
+    }
+    if (outH > srcH) outH = srcH; // never upscale
+    int outW = srcH > 0 ? ((srcW * outH / srcH).round() ~/ 2) * 2 : srcW;
+    outH = (outH ~/ 2) * 2;
 
     final cacheDir = await getApplicationCacheDirectory();
     final defaultName =
@@ -1186,94 +1251,139 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       return;
     }
 
-    final safeOutputPath = await _prepareOutputPath(requestedPath);
-    final silentVideoPath = p.join(
-      cacheDir.path,
-      'silent_${DateTime.now().millisecondsSinceEpoch}.mp4',
-    );
-    final targetFps = srcFps.isFinite && srcFps > 0 ? srcFps : 30.0;
+    exportCapture.dispose(); // metadata only; export loop opens its own capture
 
-    vw.release();
-    vw.open(silentVideoPath, 'mp4v', targetFps, (srcW, srcH));
-    if (!vw.isOpened) {
-      exportCapture.dispose();
+    final safeOutputPath = await _prepareOutputPath(requestedPath);
+    final targetFps = srcFps.isFinite && srcFps > 0 ? srcFps : 30.0;
+    final audioSourcePath = _openedSrcPath!;
+
+    // Try to find ffmpeg for single-pass H.264 pipe encoding.
+    setState(() => _statusText = 'Locating ffmpeg...');
+    final ffmpegExe = await _quickFindFfmpeg();
+    if (ffmpegExe == null) {
       if (mounted) {
         setState(() {
           _isSaving = false;
-          _statusText = 'Failed to open writer.';
+          _statusText =
+              'ffmpeg not found (or auto-install failed). Export aborted.';
         });
       }
       return;
     }
 
-    int written = 0;
-    while (true) {
-      final (ok, frame) = await exportCapture.readAsync();
-      if (!ok || frame.width == 0 || frame.height == 0) {
-        frame.dispose();
-        break;
+    if (mounted) {
+      setState(() {
+        _statusText = 'Starting converter...';
+      });
+    }
+
+    // Run the frame-processing loop in a background isolate so the UI stays
+    // responsive and the heavy 4K OpenCV work doesn't block the Flutter engine.
+    _fromSaveIsolatePort = ReceivePort();
+    _saveIsolate = await Isolate.spawn(_saveVideoIsolateEntry, [
+      _fromSaveIsolatePort!.sendPort,
+      _openedSrcPath!,
+      safeOutputPath,
+      targetFps,
+      srcW,
+      srcH,
+      totalFrames,
+      _buildCorrectionParams(),
+      ffmpegExe,
+      audioSourcePath,
+      outW,
+      outH,
+    ]);
+
+    final completer = Completer<Map<String, dynamic>>();
+    _saveIsolateSub = _fromSaveIsolatePort!.listen((msg) {
+      if (msg is! Map) return;
+      final type = msg['type'] as String?;
+      if (type == 'progress') {
+        final written = msg['written'] as int? ?? 0;
+        final total = msg['total'] as int? ?? totalFrames;
+        if (mounted) {
+          setState(() {
+            _saveProgress = total > 0 ? (written / total).clamp(0.0, 1.0) : 0.0;
+            _statusText = 'Exporting... $written/$total';
+          });
+        }
+      } else if (type == 'done') {
+        if (!completer.isCompleted) {
+          completer.complete(Map<String, dynamic>.from(msg as Map));
+        }
+      } else if (type == 'error') {
+        final errMsg = msg['message'] as String? ?? 'Unknown export error';
+        debugPrint('Save isolate error: $errMsg');
+        if (!completer.isCompleted) {
+          completer.complete({
+            'success': false,
+            'hasAudio': false,
+            'message': errMsg,
+          });
+        }
       }
+    });
 
-      final corrected = await _applyCorrections(frame);
-      await vw.writeAsync(corrected);
+    final result = await completer.future;
+    await _killSaveIsolate();
 
-      frame.dispose();
-      corrected.dispose();
-
-      written += 1;
-      if (mounted && written % 10 == 0) {
-        final progress = totalFrames > 0
-            ? (written / totalFrames).clamp(0.0, 1.0)
-            : 0.0;
+    final saveSucceeded = result['success'] as bool? ?? false;
+    if (!saveSucceeded) {
+      final errDetail = result['message'] as String? ?? '';
+      if (mounted) {
         setState(() {
-          _saveProgress = progress;
-          _statusText =
-              'Exporting... ${written.toString()}/${totalFrames.toString()}';
+          _isSaving = false;
+          _statusText = errDetail.isNotEmpty
+              ? 'Export failed: $errDetail'
+              : 'Failed to write video frames.';
         });
       }
+      return;
     }
 
-    vw.release();
-    exportCapture.dispose();
-
-    final audioSourcePath = _openedSrcPath ?? src!;
-    final muxed = await _muxOriginalAudioToVideo(
-      silentVideoPath: silentVideoPath,
-      sourceWithAudioPath: audioSourcePath,
-      outputPath: safeOutputPath,
-    );
-    if (!muxed) {
-      await File(silentVideoPath).copy(safeOutputPath);
-    }
-    if (File(silentVideoPath).existsSync()) {
-      await File(silentVideoPath).delete();
-    }
+    bool hasAudio = result['hasAudio'] as bool? ?? false;
 
     if (safeOutputPath != requestedPath) {
       await File(safeOutputPath).copy(requestedPath);
       await File(safeOutputPath).delete();
     }
 
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
     setState(() {
       _isSaving = false;
       _saveProgress = 1;
       dst = requestedPath;
-      _statusText = muxed
+      _statusText = hasAudio
           ? 'Saved with audio: $requestedPath'
           : 'Saved (video only): $requestedPath';
     });
+  }
+
+  Future<void> _openSavedFolderInExplorer() async {
+    final savedPath = dst;
+    if (savedPath == null) return;
+    final dir = p.dirname(savedPath);
+    if (Platform.isWindows) {
+      await Process.run('explorer.exe', ['/select,$savedPath']);
+    } else if (Platform.isMacOS) {
+      await Process.run('open', ['-R', savedPath]);
+    } else {
+      await Process.run('xdg-open', [dir]);
+    }
   }
 
   @override
   void dispose() {
     _controlsHideTimer?.cancel();
     unawaited(_killPlaybackIsolate());
+    unawaited(_killSaveIsolate());
+    unawaited(_deleteTempInputIfNeeded());
+    unawaited(_clearTemporaryCacheDirectory());
     vc.release();
     vw.release();
     _fullscreenFocusNode.dispose();
+    _setCurrentFrame(null);
     unawaited(
       _audioPlayer.dispose().catchError((e) {
         debugPrint('Audio dispose ignored: $e');
@@ -1293,6 +1403,15 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     _fromIsolatePort = null;
   }
 
+  Future<void> _killSaveIsolate() async {
+    _saveIsolateSub?.cancel();
+    _saveIsolateSub = null;
+    _saveIsolate?.kill(priority: Isolate.immediate);
+    _saveIsolate = null;
+    _fromSaveIsolatePort?.close();
+    _fromSaveIsolatePort = null;
+  }
+
   Map<String, dynamic> _buildCorrectionParams() => {
     'autoCorrection': _autoCorrection,
     'autoStrength': _autoStrength,
@@ -1309,6 +1428,138 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     'particleReduction': _particleReduction,
     'particleReductionStrength': _particleReductionStrength,
   };
+
+  Future<Map<String, dynamic>> _exportVideoWithFfmpeg({
+    required String videoPath,
+    required String outputPath,
+    required String ffmpegExe,
+    required String audioSourcePath,
+    required double fps,
+    required int srcW,
+    required int srcH,
+    required int totalFrames,
+    required int outW,
+    required int outH,
+    required Map<String, dynamic> params,
+  }) async {
+    final vcExport = cv.VideoCapture.fromFile(videoPath);
+    if (!vcExport.isOpened) {
+      vcExport.dispose();
+      return {
+        'success': false,
+        'hasAudio': false,
+        'message': 'Cannot open video for export: $videoPath',
+      };
+    }
+
+    Process? ffProcess;
+    final stderrBuf = StringBuffer();
+    final needsResize = outW != srcW || outH != srcH;
+
+    try {
+      ffProcess = await Process.start(ffmpegExe, [
+        '-y',
+        '-f',
+        'rawvideo',
+        '-pix_fmt',
+        'bgr24',
+        '-s',
+        '${outW}x$outH',
+        '-r',
+        fps.toStringAsFixed(6),
+        '-i',
+        'pipe:0',
+        '-i',
+        audioSourcePath,
+        '-map',
+        '0:v:0',
+        '-map',
+        '1:a:0?',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'fast',
+        '-crf',
+        '23',
+        '-c:a',
+        'aac',
+        '-shortest',
+        outputPath,
+      ]);
+
+      final stderrDone = ffProcess.stderr
+          .transform(const SystemEncoding().decoder)
+          .listen((s) => stderrBuf.write(s))
+          .asFuture<void>()
+          .catchError((_) {});
+
+      var written = 0;
+      while (true) {
+        final (ok, frame) = await vcExport.readAsync();
+        if (!ok || frame.width == 0 || frame.height == 0) {
+          frame.dispose();
+          break;
+        }
+
+        final corrected = await _applyExportCorrections(frame, params);
+        cv.Mat output = corrected;
+        if (needsResize) {
+          output = await cv.resizeAsync(corrected, (outW, outH));
+          corrected.dispose();
+        }
+
+        // Copy raw bytes to Dart heap BEFORE disposing the Mat.
+        final frameBytes = Uint8List.fromList(output.data);
+        frame.dispose();
+        output.dispose();
+        ffProcess.stdin.add(frameBytes);
+
+        written++;
+        if (written % 30 == 0) {
+          // Flush every 30 frames for backpressure.
+          await ffProcess.stdin.flush();
+          if (mounted) {
+            setState(() {
+              _saveProgress = totalFrames > 0
+                  ? (written / totalFrames).clamp(0.0, 1.0)
+                  : 0.0;
+              _statusText = 'Exporting... $written/$totalFrames';
+            });
+          }
+          await Future<void>.delayed(Duration.zero);
+        }
+      }
+
+      await ffProcess.stdin.flush();
+      await ffProcess.stdin.close();
+      final exitCode = await ffProcess.exitCode;
+      await stderrDone;
+      vcExport.dispose();
+
+      if (exitCode == 0) {
+        return {'success': true, 'hasAudio': true, 'written': written};
+      }
+
+      return {
+        'success': false,
+        'hasAudio': false,
+        'message':
+            'ffmpeg exited with code $exitCode: ${stderrBuf.toString().trim()}',
+      };
+    } catch (e) {
+      debugPrint('ffmpeg export exception: $e');
+      try {
+        await ffProcess?.stdin.close();
+      } catch (_) {}
+      ffProcess?.kill();
+      vcExport.dispose();
+      return {
+        'success': false,
+        'hasAudio': false,
+        'message': 'ffmpeg export exception: $e',
+      };
+    }
+  }
 
   void _pushRealtimeParamsToIsolate() {
     if (!_isPlaying) return;
@@ -1410,7 +1661,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
           _isolateSendPort?.send({'cmd': 'ack'});
           return;
         }
-        setState(() => _currentFrame = image);
+        setState(() => _setCurrentFrame(image));
         // Send ack so isolate proceeds to next frame (backpressure).
         _isolateSendPort?.send({'cmd': 'ack'});
       } else if (type == 'done') {
@@ -1514,6 +1765,16 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
           }
           return KeyEventResult.handled;
         }
+        if (key == LogicalKeyboardKey.arrowRight && _hasVideo && !_isSaving) {
+          final skipFrames = (fps > 0 ? fps * 10 : 300).round();
+          unawaited(_seekTo(_lastReceivedFrameNum + skipFrames));
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.arrowLeft && _hasVideo && !_isSaving) {
+          final skipFrames = (fps > 0 ? fps * 10 : 300).round();
+          unawaited(_seekTo(_lastReceivedFrameNum - skipFrames));
+          return KeyEventResult.handled;
+        }
         if (key == LogicalKeyboardKey.keyN &&
             _hasNextPlaylistFile &&
             !_isSaving) {
@@ -1573,6 +1834,24 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                         : null,
                     icon: const Icon(Icons.save_alt, color: Colors.white),
                   ),
+                  IconButton(
+                    tooltip: 'Open saved folder in Explorer',
+                    onPressed: (dst != null && !_isSaving)
+                        ? _openSavedFolderInExplorer
+                        : null,
+                    icon: const Icon(
+                      Icons.folder_open_outlined,
+                      color: Colors.white,
+                    ),
+                  ),
+                  // IconButton(
+                  //   tooltip: 'Save correction settings',
+                  //   onPressed: !_isSaving ? _saveSettings : null,
+                  //   icon: const Icon(
+                  //     Icons.settings_backup_restore,
+                  //     color: Colors.white,
+                  //   ),
+                  // ),
                 ],
                 backgroundColor: colorMain,
               ),
@@ -1651,7 +1930,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
             Text('status: $_statusText'),
             Text('size: ${width > 0 ? '$width x $height' : '-'}'),
             Text('fps: ${fps > 0 ? fps.toStringAsFixed(2) : '-'}'),
-            Text('backend: $backend'),
+            // Text('backend: $backend'),
             Text('file: $playlistLabel  $currentFileName'),
           ],
         ),
@@ -1688,14 +1967,14 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
           ),
         ),
         const SizedBox(height: 4),
-        ExtendedText(
-          'dst: $dst',
-          maxLines: 1,
-          overflowWidget: const TextOverflowWidget(
-            position: TextOverflowPosition.middle,
-            child: Text('...'),
-          ),
-        ),
+        // ExtendedText(
+        //   'dst: $dst',
+        //   maxLines: 1,
+        //   overflowWidget: const TextOverflowWidget(
+        //     position: TextOverflowPosition.middle,
+        //     child: Text('...'),
+        //   ),
+        // ),
       ],
     );
   }
@@ -1945,9 +2224,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: (_hasVideo && !_isSaving)
-                      ? _saveEditedVideo
-                      : null,
+                  onPressed: !_isSaving ? _saveSettings : null,
                   child: const Text('Save'),
                 ),
               ),
@@ -2398,9 +2675,13 @@ Future<void> _playbackIsolateEntry(List<dynamic> args) async {
 
     final elapsedUs = playbackClock.elapsedMicroseconds;
     final targetElapsedUs = localFrameCount * frameIntervalUs;
-    final waitUs = targetElapsedUs - elapsedUs;
-    if (waitUs > 0) {
-      await Future<void>.delayed(Duration(microseconds: waitUs));
+    final diffUs = targetElapsedUs - elapsedUs;
+
+    // When ahead of schedule, wait to maintain target fps.
+    // When behind (heavy decode/correction), just proceed immediately without
+    // skipping frames – avoids visual stuttering on 4K sources.
+    if (diffUs > 0) {
+      await Future<void>.delayed(Duration(microseconds: diffUs));
     }
   }
 
@@ -2586,18 +2867,581 @@ Future<cv.Mat> _applyRealtimeCorrections(
   final blueOceanTone = params['blueOceanTone'] as double? ?? 1.12;
   if ((blueOceanTone - 1.0).abs() > 0.01) {
     final bgrChannels = await cv.splitAsync(working);
+    final bBaseChannel = bgrChannels[0];
+    final gBaseChannel = bgrChannels[1];
+    final rBaseChannel = bgrChannels[2];
     final bScaled = await cv.convertScaleAbsAsync(
-      bgrChannels[0],
+      bBaseChannel,
       alpha: blueOceanTone,
     );
     final blued = await cv.mergeAsync(
-      cv.VecMat.fromList([bScaled, bgrChannels[1], bgrChannels[2]]),
+      cv.VecMat.fromList([bScaled, gBaseChannel, rBaseChannel]),
     );
     bScaled.dispose();
+    bBaseChannel.dispose();
+    gBaseChannel.dispose();
+    rBaseChannel.dispose();
     working.dispose();
     working = blued;
   }
 
+  final temperature = params['temperature'] as double? ?? 10.0;
+  final tempMix = (temperature.abs() / 100.0 * 0.28).clamp(0.0, 0.28);
+  if (tempMix > 0.001) {
+    final tint = temperature >= 0
+        ? cv.Scalar(0.0, 10.0, 40.0, 0.0)
+        : cv.Scalar(40.0, 10.0, 0.0, 0.0);
+    final tintMat = cv.Mat.fromScalar(
+      working.rows,
+      working.cols,
+      cv.MatType.CV_8UC3,
+      tint,
+    );
+    final mixed = await cv.addWeightedAsync(
+      working,
+      1.0,
+      tintMat,
+      tempMix,
+      0.0,
+    );
+    tintMat.dispose();
+    working.dispose();
+    working = mixed;
+  }
+
+  return working;
+}
+
+/// Quickly checks common locations for an ffmpeg executable without attempting
+/// to download/install anything. Returns the path if found, null otherwise.
+/// Finds an ffmpeg executable. If not found in PATH or common locations,
+/// automatically downloads and installs a portable version (Windows only).
+Future<String?> _quickFindFfmpeg() async {
+  Future<bool> canRun(String exe) async {
+    try {
+      final r = await Process.run(exe, ['-version'], runInShell: true);
+      return r.exitCode == 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 1. Check system PATH
+  if (await canRun('ffmpeg')) return 'ffmpeg';
+
+  // 2. Check common local/bundled paths
+  final exeDir = p.dirname(Platform.resolvedExecutable);
+  final candidates = [
+    p.join(Directory.current.path, 'ffmpeg.exe'),
+    p.join(Directory.current.path, 'tools', 'ffmpeg', 'ffmpeg.exe'),
+    p.join(Directory.current.path, 'ffmpeg', 'bin', 'ffmpeg.exe'),
+    p.join(exeDir, 'ffmpeg.exe'),
+    p.join(exeDir, 'ffmpeg', 'ffmpeg.exe'),
+    p.join(exeDir, 'ffmpeg', 'bin', 'ffmpeg.exe'),
+    p.join(exeDir, 'data', 'flutter_assets', 'assets', 'ffmpeg', 'ffmpeg.exe'),
+  ];
+  for (final c in candidates) {
+    if (File(c).existsSync() && await canRun(c)) return c;
+  }
+
+  // 3. Check previously installed portable ffmpeg
+  if (Platform.isWindows) {
+    try {
+      final supportDir = await getApplicationSupportDirectory();
+      final installedExe = p.join(
+        supportDir.path,
+        'ffmpeg_portable',
+        'bin',
+        'ffmpeg.exe',
+      );
+      if (File(installedExe).existsSync() && await canRun(installedExe)) {
+        return installedExe;
+      }
+
+      // 4. Auto-download portable ffmpeg (gyan.dev essentials build)
+      debugPrint('[ffmpeg] Not found. Attempting auto-install...');
+      final installBinDir = Directory(
+        p.join(supportDir.path, 'ffmpeg_portable', 'bin'),
+      );
+      await installBinDir.create(recursive: true);
+
+      final tempRoot = Directory(
+        p.join(supportDir.path, 'ffmpeg_download_tmp'),
+      );
+      if (tempRoot.existsSync()) await tempRoot.delete(recursive: true);
+      await tempRoot.create(recursive: true);
+
+      final zipPath = p.join(tempRoot.path, 'ffmpeg.zip');
+      final extractPath = p.join(tempRoot.path, 'extracted');
+      const url =
+          'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
+
+      String psQuote(String v) => v.replaceAll("'", "''");
+      final script =
+          "\$ErrorActionPreference='Stop'; "
+          "\$ProgressPreference='SilentlyContinue'; "
+          "Invoke-WebRequest -Uri '${psQuote(url)}' -OutFile '${psQuote(zipPath)}'; "
+          "Expand-Archive -Path '${psQuote(zipPath)}' -DestinationPath '${psQuote(extractPath)}' -Force;";
+
+      final download = await Process.run('powershell', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        script,
+      ], runInShell: true);
+
+      if (download.exitCode != 0) {
+        debugPrint('[ffmpeg] Auto-install download failed: ${download.stderr}');
+        return null;
+      }
+
+      // Find ffmpeg.exe inside the extracted archive (bin/ subdirectory)
+      File? foundExe;
+      await for (final entity in Directory(
+        extractPath,
+      ).list(recursive: true, followLinks: false)) {
+        if (entity is! File) continue;
+        if (p.basename(entity.path).toLowerCase() != 'ffmpeg.exe') continue;
+        if (p.basename(p.dirname(entity.path)).toLowerCase() != 'bin') continue;
+        foundExe = entity;
+        break;
+      }
+
+      if (foundExe == null) {
+        debugPrint('[ffmpeg] Extracted archive but ffmpeg.exe not found.');
+        return null;
+      }
+
+      // Copy all files from the bin/ dir into installBinDir
+      final sourceBin = Directory(p.dirname(foundExe.path));
+      await for (final entity in sourceBin.list(followLinks: false)) {
+        if (entity is File) {
+          await entity.copy(
+            p.join(installBinDir.path, p.basename(entity.path)),
+          );
+        }
+      }
+
+      // Clean up temp files
+      try {
+        await tempRoot.delete(recursive: true);
+      } catch (_) {}
+
+      if (File(installedExe).existsSync() && await canRun(installedExe)) {
+        debugPrint('[ffmpeg] Auto-install succeeded: $installedExe');
+        return installedExe;
+      }
+    } catch (e) {
+      debugPrint('[ffmpeg] Auto-install exception: $e');
+    }
+  }
+
+  return null;
+}
+
+/// Entry point for the background save isolate.
+/// args: [SendPort, videoPath, outputPath, fps, width, height, totalFrames,
+///        params, ffmpegExe (String), audioSourcePath (String),
+///        targetWidth (int), targetHeight (int)]
+Future<void> _saveVideoIsolateEntry(List<dynamic> args) async {
+  final SendPort mainPort = args[0] as SendPort;
+  final String videoPath = args[1] as String;
+  final String outputPath = args[2] as String;
+  final double fps = args[3] as double;
+  final int width = args[4] as int;
+  final int height = args[5] as int;
+  final int totalFrames = args[6] as int;
+  final Map<String, dynamic> params = Map<String, dynamic>.from(args[7] as Map);
+  final String ffmpegExe = args[8] as String;
+  final String audioSourcePath = args[9] as String;
+  final int targetWidth = args.length > 10
+      ? (args[10] as int? ?? width)
+      : width;
+  final int targetHeight = args.length > 11
+      ? (args[11] as int? ?? height)
+      : height;
+  final bool needsResize = targetWidth != width || targetHeight != height;
+
+  final vc = cv.VideoCapture.fromFile(videoPath);
+  if (!vc.isOpened) {
+    mainPort.send({
+      'type': 'error',
+      'message': 'Cannot open video: $videoPath',
+    });
+    vc.dispose();
+    return;
+  }
+
+  Process? ffProcess;
+  try {
+    ffProcess = await Process.start(ffmpegExe, [
+      '-y',
+      '-f',
+      'rawvideo',
+      '-pix_fmt',
+      'bgr24',
+      '-s',
+      '${targetWidth}x$targetHeight',
+      '-r',
+      fps.toStringAsFixed(6),
+      '-i',
+      'pipe:0',
+      '-i',
+      audioSourcePath,
+      '-map',
+      '0:v:0',
+      '-map',
+      '1:a:0?',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'fast',
+      '-crf',
+      '23',
+      '-c:a',
+      'aac',
+      '-shortest',
+      outputPath,
+    ]);
+
+    // Collect stderr so we can report it on failure, and to prevent ffmpeg
+    // from blocking when the stderr pipe buffer fills up (which would deadlock
+    // the stdin write loop below).
+    final stderrBuf = StringBuffer();
+    final stderrDone = ffProcess.stderr
+        .transform(const SystemEncoding().decoder)
+        .listen((s) => stderrBuf.write(s))
+        .asFuture<void>()
+        .catchError((_) {});
+
+    // Flush interval: keep ~150 MB in the IOSink buffer at most.
+    // 4K BGR24 = ~25 MB/frame → flush every 6 frames.
+    // 2K BGR24 = ~6 MB/frame  → flush every 25 frames.
+    final frameSizeBytes = targetWidth * targetHeight * 3;
+    final flushInterval = ((150 * 1024 * 1024) / frameSizeBytes).floor().clamp(
+      1,
+      60,
+    );
+
+    int written = 0;
+    while (true) {
+      final (ok, frame) = await vc.readAsync();
+      if (!ok || frame.width == 0 || frame.height == 0) {
+        frame.dispose();
+        break;
+      }
+      final corrected = await _applyExportCorrections(frame, params);
+      cv.Mat output = corrected;
+      if (needsResize) {
+        output = await cv.resizeAsync(corrected, (targetWidth, targetHeight));
+        corrected.dispose();
+      }
+      // Copy raw bytes to Dart heap BEFORE disposing the Mat so the pipe
+      // write never touches freed native memory (use-after-free crash fix).
+      final frameBytes = Uint8List.fromList(output.data);
+      frame.dispose();
+      output.dispose();
+      ffProcess.stdin.add(frameBytes);
+
+      written++;
+      if (written % flushInterval == 0) {
+        // Adaptive flush: drain ~150 MB at a time regardless of resolution.
+        await ffProcess.stdin.flush();
+        mainPort.send({
+          'type': 'progress',
+          'written': written,
+          'total': totalFrames,
+        });
+      }
+    }
+
+    await ffProcess.stdin.flush();
+    await ffProcess.stdin.close();
+    final exitCode = await ffProcess.exitCode;
+    await stderrDone; // ensure stderr buffer is fully flushed
+    vc.dispose();
+
+    if (exitCode == 0) {
+      mainPort.send({
+        'type': 'done',
+        'success': true,
+        'hasAudio': true,
+        'written': written,
+      });
+      return;
+    }
+
+    mainPort.send({
+      'type': 'error',
+      'message':
+          'ffmpeg exited with code $exitCode: ${stderrBuf.toString().trim()}',
+    });
+    return;
+  } catch (e) {
+    debugPrint('ffmpeg pipe exception: $e');
+    ffProcess?.stdin.close().catchError((_) {});
+    ffProcess?.kill();
+    vc.dispose();
+    mainPort.send({'type': 'error', 'message': 'ffmpeg pipe exception: $e'});
+  }
+}
+
+/// Full-quality corrections for export (no realtime caps, includes saturation
+/// HSV pass and full blue-ocean masking).
+Future<cv.Mat> _applyExportCorrections(
+  cv.Mat inputFrame,
+  Map<String, dynamic> params,
+) async {
+  cv.Mat working = inputFrame;
+
+  // Particle reduction
+  final particleReduction = params['particleReduction'] as bool? ?? false;
+  final particleReductionStrength =
+      params['particleReductionStrength'] as double? ?? 0.55;
+  if (particleReduction) {
+    final kernel = particleReductionStrength < 0.33
+        ? 3
+        : (particleReductionStrength < 0.66 ? 5 : 7);
+    final denoised = await cv.medianBlurAsync(working, kernel);
+    if (!identical(working, inputFrame)) working.dispose();
+    working = denoised;
+  }
+
+  // Auto underwater correction with optional local mask
+  final autoCorrection = params['autoCorrection'] as bool? ?? true;
+  if (autoCorrection) {
+    final autoStrength = params['autoStrength'] as double? ?? 0.62;
+    final redRecovery = params['redRecovery'] as double? ?? 1.05;
+    final localMaskEnabled = params['localMaskEnabled'] as bool? ?? false;
+    final localMaskStrength = params['localMaskStrength'] as double? ?? 0.55;
+
+    final beforeAuto = localMaskEnabled
+        ? cv.Mat.fromMat(working, copy: true)
+        : cv.Mat.empty();
+
+    final channels = await cv.splitAsync(working);
+    final b = channels[0];
+    final g = channels[1];
+    final r = channels[2];
+
+    final bMean = b.mean().val1;
+    final gMean = g.mean().val1;
+    final rMean = r.mean().val1;
+    final target = (bMean + gMean + rMean) / 3.0;
+    final blueGreen = (bMean + gMean) / 2.0;
+    final redDeficit = ((blueGreen - rMean) / math.max(blueGreen, 1.0)).clamp(
+      0.0,
+      1.0,
+    );
+
+    final bGain = (target / math.max(bMean, 1.0)).clamp(0.7, 1.8);
+    final gGain = (target / math.max(gMean, 1.0)).clamp(0.7, 1.8);
+    final rGain = (target / math.max(rMean, 1.0)).clamp(0.7, 1.8);
+    final highlight = ((target - 138.0) / 90.0).clamp(0.0, 1.0);
+    final warmScene = ((rMean - gMean) / math.max(target, 1.0)).clamp(
+      0.0,
+      0.45,
+    );
+    final redBoostBase =
+        1.0 + redDeficit * (0.42 + autoStrength * 0.48) * redRecovery;
+    final redBoost =
+        (1.0 +
+                (redBoostBase - 1.0) *
+                    (1.0 - 0.8 * highlight - 0.55 * warmScene))
+            .clamp(1.0, 1.38);
+    final blueSuppress = (1.0 - redDeficit * 0.10 * autoStrength).clamp(
+      0.9,
+      1.0,
+    );
+    final greenSuppress = (1.0 - redDeficit * 0.04 * autoStrength).clamp(
+      0.95,
+      1.0,
+    );
+
+    final bAlpha = (1.0 + (bGain - 1.0) * autoStrength) * blueSuppress;
+    final gAlpha = (1.0 + (gGain - 1.0) * autoStrength) * greenSuppress;
+    final rAlpha = ((1.0 + (rGain - 1.0) * autoStrength) * redBoost).clamp(
+      0.9,
+      1.45,
+    );
+
+    final bAdj = await cv.convertScaleAbsAsync(b, alpha: bAlpha);
+    final gAdj = await cv.convertScaleAbsAsync(g, alpha: gAlpha);
+    final rAdj = await cv.convertScaleAbsAsync(r, alpha: rAlpha);
+    final balanced = await cv.mergeAsync(
+      cv.VecMat.fromList([bAdj, gAdj, rAdj]),
+    );
+
+    b.dispose();
+    g.dispose();
+    r.dispose();
+    bAdj.dispose();
+    gAdj.dispose();
+    rAdj.dispose();
+    if (!identical(working, inputFrame)) working.dispose();
+    working = balanced;
+
+    if (localMaskEnabled && !beforeAuto.isEmpty) {
+      final gray = await cv.cvtColorAsync(beforeAuto, cv.COLOR_BGR2GRAY);
+      final threshold = (215.0 - localMaskStrength * 55.0).clamp(145.0, 220.0);
+      final (_, highlightMask) = await cv.thresholdAsync(
+        gray,
+        threshold,
+        255,
+        cv.THRESH_BINARY,
+      );
+      final invMask = await cv.bitwiseNOTAsync(highlightMask);
+      final correctedCore = await cv.bitwiseANDAsync(
+        working,
+        working,
+        mask: invMask,
+      );
+      final preservedHighlight = await cv.bitwiseANDAsync(
+        beforeAuto,
+        beforeAuto,
+        mask: highlightMask,
+      );
+      final mixed = await cv.addAsync(correctedCore, preservedHighlight);
+
+      gray.dispose();
+      highlightMask.dispose();
+      invMask.dispose();
+      correctedCore.dispose();
+      preservedHighlight.dispose();
+      working.dispose();
+      working = mixed;
+    }
+    beforeAuto.dispose();
+  }
+
+  // Green water correction
+  final greenWaterAutoCorrection =
+      params['greenWaterAutoCorrection'] as bool? ?? false;
+  if (greenWaterAutoCorrection) {
+    final greenWaterStrength = params['greenWaterStrength'] as double? ?? 0.55;
+    final bgr = await cv.splitAsync(working);
+    final b = bgr[0];
+    final g = bgr[1];
+    final r = bgr[2];
+
+    final bMean = b.mean().val1;
+    final gMean = g.mean().val1;
+    final rMean = r.mean().val1;
+    final rgAvg = (rMean + bMean) / 2.0;
+    final greenBias = ((gMean - rgAvg) / math.max(gMean, 1.0)).clamp(0.0, 1.0);
+    final mix = (greenWaterStrength * (0.35 + 0.65 * greenBias)).clamp(
+      0.0,
+      1.0,
+    );
+
+    final greenReduce = (1.0 - mix * 0.24).clamp(0.76, 1.0);
+    final redBoost = (1.0 + mix * 0.20).clamp(1.0, 1.28);
+    final blueBoost = (1.0 + mix * 0.14).clamp(1.0, 1.20);
+
+    final bAdj = await cv.convertScaleAbsAsync(b, alpha: blueBoost);
+    final gAdj = await cv.convertScaleAbsAsync(g, alpha: greenReduce);
+    final rAdj = await cv.convertScaleAbsAsync(r, alpha: redBoost);
+    final magentaBalanced = await cv.mergeAsync(
+      cv.VecMat.fromList([bAdj, gAdj, rAdj]),
+    );
+
+    b.dispose();
+    g.dispose();
+    r.dispose();
+    bAdj.dispose();
+    gAdj.dispose();
+    rAdj.dispose();
+    if (!identical(working, inputFrame)) working.dispose();
+    working = magentaBalanced;
+  }
+
+  // Contrast & brightness – full values (no realtime cap)
+  final contrast = params['contrast'] as double? ?? 1.2;
+  final brightness = params['brightness'] as double? ?? 6.0;
+  final saturation = params['saturation'] as double? ?? 1.12;
+
+  final leveled = await cv.convertScaleAbsAsync(
+    working,
+    alpha: contrast,
+    beta: brightness,
+  );
+  if (!identical(working, inputFrame)) working.dispose();
+  working = leveled;
+
+  // Saturation (HSV round-trip, skipped in realtime mode)
+  if ((saturation - 1.0).abs() > 0.01) {
+    final hsv = await cv.cvtColorAsync(working, cv.COLOR_BGR2HSV);
+    final hsvChannels = await cv.splitAsync(hsv);
+    final hCh = hsvChannels[0];
+    final sCh = hsvChannels[1];
+    final vCh = hsvChannels[2];
+    final satAdjusted = await cv.convertScaleAbsAsync(sCh, alpha: saturation);
+    final hsvMerged = await cv.mergeAsync(
+      cv.VecMat.fromList([hCh, satAdjusted, vCh]),
+    );
+    final saturatedBgr = await cv.cvtColorAsync(hsvMerged, cv.COLOR_HSV2BGR);
+    satAdjusted.dispose();
+    hCh.dispose();
+    sCh.dispose();
+    vCh.dispose();
+    hsvMerged.dispose();
+    hsv.dispose();
+    working.dispose();
+    working = saturatedBgr;
+  }
+
+  // Blue ocean tone – full HSV-masked path
+  final blueOceanTone = params['blueOceanTone'] as double? ?? 1.12;
+  if ((blueOceanTone - 1.0).abs() > 0.01) {
+    final hsvForBlue = await cv.cvtColorAsync(working, cv.COLOR_BGR2HSV);
+    final lowerBlue = cv.Mat.fromScalar(
+      hsvForBlue.rows,
+      hsvForBlue.cols,
+      cv.MatType.CV_8UC3,
+      cv.Scalar(72.0, 30.0, 20.0, 0.0),
+    );
+    final upperBlue = cv.Mat.fromScalar(
+      hsvForBlue.rows,
+      hsvForBlue.cols,
+      cv.MatType.CV_8UC3,
+      cv.Scalar(132.0, 255.0, 255.0, 0.0),
+    );
+    final blueMask = await cv.inRangeAsync(hsvForBlue, lowerBlue, upperBlue);
+    final invBlueMask = await cv.bitwiseNOTAsync(blueMask);
+
+    final bgrChannels = await cv.splitAsync(working);
+    final b = bgrChannels[0];
+    final g = bgrChannels[1];
+    final r = bgrChannels[2];
+
+    final bBoosted = await cv.convertScaleAbsAsync(b, alpha: blueOceanTone);
+    final bBase = await cv.bitwiseANDAsync(b, b, mask: invBlueMask);
+    final bMaskedBoost = await cv.bitwiseANDAsync(
+      bBoosted,
+      bBoosted,
+      mask: blueMask,
+    );
+    final bFinal = await cv.addAsync(bBase, bMaskedBoost);
+    final blued = await cv.mergeAsync(cv.VecMat.fromList([bFinal, g, r]));
+
+    hsvForBlue.dispose();
+    lowerBlue.dispose();
+    upperBlue.dispose();
+    blueMask.dispose();
+    invBlueMask.dispose();
+    bBoosted.dispose();
+    bBase.dispose();
+    bMaskedBoost.dispose();
+    bFinal.dispose();
+    b.dispose();
+    g.dispose();
+    r.dispose();
+    working.dispose();
+    working = blued;
+  }
+
+  // Color temperature tint
   final temperature = params['temperature'] as double? ?? 10.0;
   final tempMix = (temperature.abs() / 100.0 * 0.28).clamp(0.0, 0.28);
   if (tempMix > 0.001) {
