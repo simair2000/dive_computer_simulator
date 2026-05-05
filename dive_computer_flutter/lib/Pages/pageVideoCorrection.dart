@@ -16,6 +16,8 @@ import 'package:dartcv4/dartcv.dart' as cv;
 import 'package:media_kit/media_kit.dart' as mk;
 import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
 
 class PageVideoCorrection extends StatefulWidget {
   const PageVideoCorrection({super.key});
@@ -40,8 +42,10 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   bool _isPlaying = false;
   bool _isPaused = false;
   bool _isSaving = false;
+  bool _isFullscreen = false;
   bool _processingFrame = false;
   int _playbackSession = 0;
+  final FocusNode _fullscreenFocusNode = FocusNode();
 
   // Playback isolate state
   Isolate? _playbackIsolate;
@@ -49,10 +53,15 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   ReceivePort? _fromIsolatePort;
   StreamSubscription<dynamic>? _isolateSub;
   int _lastReceivedFrameNum = 0;
+  int _lastReceivedPosMs = 0;
   int _totalFrames = 0;
   bool _seekingSlider = false;
   double _saveProgress = 0;
   String _statusText = 'Waiting...';
+  final List<String> _playlistPaths = [];
+  int _playlistIndex = -1;
+
+  bool _isAnalysing = false;
 
   bool _autoCorrection = true;
   double _autoStrength = 0.62;
@@ -61,6 +70,8 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   double _saturation = 1.12;
   double _temperature = 10.0;
   double _redRecovery = 1.05;
+  bool _greenWaterAutoCorrection = false;
+  double _greenWaterStrength = 0.55;
   bool _localMaskEnabled = false;
   double _localMaskStrength = 0.55;
   double _blueOceanTone = 1.12;
@@ -68,13 +79,22 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   double _particleReductionStrength = 0.55;
   double _audioVolume = 1.0;
   bool _audioEnabled = true;
+  bool _controlsVisible = true;
+  Timer? _controlsHideTimer;
   DateTime? _lastFineResyncAt;
   bool _fineResyncInFlight = false;
+
+  bool get _hasPrevPlaylistFile => _playlistIndex > 0;
+  bool get _hasNextPlaylistFile =>
+      _playlistIndex >= 0 && _playlistIndex < _playlistPaths.length - 1;
 
   @override
   void initState() {
     super.initState();
     mk.MediaKit.ensureInitialized();
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _resetControlsHideTimer(),
+    );
   }
 
   Future<void> _startAudioForPlayback() async {
@@ -176,6 +196,188 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
 
     _openedSrcPath = null;
     return false;
+  }
+
+  bool _isSupportedVideoPath(String path) {
+    final ext = p.extension(path).toLowerCase();
+    const supported = {
+      '.mp4',
+      '.mov',
+      '.m4v',
+      '.avi',
+      '.mkv',
+      '.wmv',
+      '.webm',
+      '.mpeg',
+      '.mpg',
+    };
+    return supported.contains(ext);
+  }
+
+  Future<List<String>> _collectVideoFilesFromFolder(String folderPath) async {
+    final dir = Directory(folderPath);
+    if (!await dir.exists()) return [];
+
+    final files = <String>[];
+    await for (final entity in dir.list(followLinks: false)) {
+      if (entity is! File) continue;
+      if (_isSupportedVideoPath(entity.path)) {
+        files.add(entity.path);
+      }
+    }
+
+    files.sort(
+      (a, b) =>
+          p.basename(a).toLowerCase().compareTo(p.basename(b).toLowerCase()),
+    );
+    return files;
+  }
+
+  Future<bool> _openVideoPath(String path) async {
+    await _stopVideo(refreshPreview: false);
+    if (!mounted) return false;
+
+    debugPrint('selected file: $path');
+
+    // Show loading state immediately before the blocking vc.open() call.
+    setState(() {
+      src = path;
+      _currentFrame = null;
+      _isPaused = false;
+      _isAnalysing = true;
+      _statusText = 'Opening video...';
+    });
+    // Yield so the UI renders the loading state before we block.
+    await Future.delayed(Duration.zero);
+
+    final ret = await _openVideoCapture(path);
+    if (!mounted) {
+      return ret;
+    }
+
+    setState(() {
+      src = path;
+      _isPaused = false;
+      if (ret) {
+        width = vc.get(cv.CAP_PROP_FRAME_WIDTH).toInt();
+        height = vc.get(cv.CAP_PROP_FRAME_HEIGHT).toInt();
+        fps = vc.get(cv.CAP_PROP_FPS);
+        backend = vc.getBackendName();
+        _totalFrames = vc.get(cv.CAP_PROP_FRAME_COUNT).toInt();
+        _lastReceivedFrameNum = 0;
+        _lastReceivedPosMs = 0;
+        _isAnalysing = true;
+        _statusText = 'Analysing...';
+      } else {
+        width = -1;
+        height = -1;
+        fps = -1;
+        backend = 'open-failed';
+        _isAnalysing = false;
+        _statusText = 'Failed to open selected video';
+      }
+    });
+
+    if (ret) {
+      // Show the raw first frame immediately so the user sees something.
+      vc.set(cv.CAP_PROP_POS_FRAMES, 0);
+      final (rawOk, rawFrame) = await vc.readAsync();
+      if (rawOk && rawFrame.width > 0) {
+        final rawImage = await _cvMatToImage(rawFrame);
+        rawFrame.dispose();
+        if (mounted) {
+          setState(() {
+            _currentFrame = rawImage;
+          });
+        }
+      } else {
+        rawFrame.dispose();
+      }
+      vc.set(cv.CAP_PROP_POS_FRAMES, 0);
+      await _refreshPreviewFrame();
+    }
+
+    final dstDir = await getApplicationCacheDirectory();
+    if (!mounted) {
+      return ret;
+    }
+    setState(() {
+      dst = p.join(dstDir.path, 'output.mp4');
+    });
+
+    return ret;
+  }
+
+  Future<bool> _openPlaylistIndex(int index, {bool autoplay = false}) async {
+    if (index < 0 || index >= _playlistPaths.length) return false;
+    final path = _playlistPaths[index];
+    final opened = await _openVideoPath(path);
+    if (!opened || !mounted) {
+      return false;
+    }
+    setState(() {
+      _playlistIndex = index;
+    });
+    if (autoplay) {
+      await _playVideo();
+    }
+    return true;
+  }
+
+  Future<bool> _openNextPlaylistFile({required bool autoplay}) async {
+    for (var i = _playlistIndex + 1; i < _playlistPaths.length; i++) {
+      if (await _openPlaylistIndex(i, autoplay: autoplay)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Future<bool> _openPrevPlaylistFile({required bool autoplay}) async {
+    for (var i = _playlistIndex - 1; i >= 0; i--) {
+      if (await _openPlaylistIndex(i, autoplay: autoplay)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Future<void> _selectFolder() async {
+    final folderPath = await FilePicker.getDirectoryPath(
+      dialogTitle: 'Select video folder',
+      lockParentWindow: true,
+    );
+    if (folderPath == null) {
+      return;
+    }
+
+    final files = await _collectVideoFilesFromFolder(folderPath);
+    if (files.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _playlistPaths..clear();
+        _playlistIndex = -1;
+        _statusText = 'No video files found in selected folder';
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _playlistPaths
+        ..clear()
+        ..addAll(files);
+      _playlistIndex = 0;
+    });
+
+    if (!await _openPlaylistIndex(0)) {
+      if (!await _openNextPlaylistFile(autoplay: false)) {
+        if (!mounted) return;
+        setState(() {
+          _statusText = 'No playable video files in selected folder';
+        });
+      }
+    }
   }
 
   Future<cv.Mat> _applyCorrections(
@@ -363,6 +565,57 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       beforeAuto.dispose();
     }
 
+    if (_greenWaterAutoCorrection) {
+      final bgr = await cv.splitAsync(working);
+      final b = bgr[0];
+      final g = bgr[1];
+      final r = bgr[2];
+
+      final bMean = b.mean().val1;
+      final gMean = g.mean().val1;
+      final rMean = r.mean().val1;
+      final rgAvg = (rMean + bMean) / 2.0;
+      final greenBias = ((gMean - rgAvg) / math.max(gMean, 1.0)).clamp(
+        0.0,
+        1.0,
+      );
+      final mix = (_greenWaterStrength * (0.35 + 0.65 * greenBias)).clamp(
+        0.0,
+        1.0,
+      );
+
+      final greenReduce = (1.0 - mix * (realtime ? 0.14 : 0.24)).clamp(
+        realtime ? 0.82 : 0.74,
+        1.0,
+      );
+      final redBoost = (1.0 + mix * (realtime ? 0.12 : 0.20)).clamp(
+        1.0,
+        realtime ? 1.22 : 1.36,
+      );
+      final blueBoost = (1.0 + mix * (realtime ? 0.08 : 0.14)).clamp(
+        1.0,
+        realtime ? 1.16 : 1.28,
+      );
+
+      final bAdj = await cv.convertScaleAbsAsync(b, alpha: blueBoost);
+      final gAdj = await cv.convertScaleAbsAsync(g, alpha: greenReduce);
+      final rAdj = await cv.convertScaleAbsAsync(r, alpha: redBoost);
+      final magentaBalanced = await cv.mergeAsync(
+        cv.VecMat.fromList([bAdj, gAdj, rAdj]),
+      );
+
+      b.dispose();
+      g.dispose();
+      r.dispose();
+      bAdj.dispose();
+      gAdj.dispose();
+      rAdj.dispose();
+      if (!identical(working, inputFrame)) {
+        working.dispose();
+      }
+      working = magentaBalanced;
+    }
+
     final contrast = realtime ? math.min(_contrast, 1.12) : _contrast;
     final brightness = realtime ? math.min(_brightness, 4.0) : _brightness;
     final saturation = realtime ? math.min(_saturation, 1.06) : _saturation;
@@ -526,19 +779,18 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     return Duration(milliseconds: math.max(0, ms));
   }
 
-  Future<void> _seekAudioToFrame(int frame) async {
+  Future<void> _seekAudioToMs(int posMs) async {
     if (!_audioEnabled) return;
     try {
-      await _audioPlayer.seek(_frameToDuration(frame));
+      await _audioPlayer.seek(Duration(milliseconds: math.max(0, posMs)));
     } catch (e) {
       debugPrint('Audio seek failed: $e');
     }
   }
 
-  Future<void> _maybeFineResyncAudio(int frameNum) async {
-    if (!_isPlaying || !_audioEnabled || !_hasVideo || fps <= 1) return;
+  Future<void> _maybeFineResyncAudio(int posMs) async {
+    if (!_isPlaying || !_audioEnabled || !_hasVideo) return;
     if (_fineResyncInFlight) return;
-    if (frameNum < 0 || frameNum % 12 != 0) return;
 
     final now = DateTime.now();
     if (_lastFineResyncAt != null &&
@@ -548,17 +800,13 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
 
     _fineResyncInFlight = true;
     try {
-      final videoPos = _frameToDuration(frameNum);
+      final videoPos = Duration(milliseconds: math.max(0, posMs));
       final audioPos = _audioPlayer.state.position;
       final driftMs = audioPos.inMilliseconds - videoPos.inMilliseconds;
 
       // Keep tiny jitter untouched; only correct meaningful drift.
       if (driftMs.abs() >= 120) {
-        var target = videoPos;
-        if (target.isNegative) {
-          target = Duration.zero;
-        }
-        await _audioPlayer.seek(target);
+        await _audioPlayer.seek(videoPos);
         _lastFineResyncAt = now;
       }
     } catch (e) {
@@ -596,7 +844,8 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       }
       setState(() {
         _currentFrame = image;
-        _statusText = 'Preview updated';
+        _isAnalysing = false;
+        _statusText = 'Video ready';
       });
       vc.set(cv.CAP_PROP_POS_FRAMES, 0);
     } finally {
@@ -610,51 +859,20 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       return;
     }
 
-    await _stopVideo(refreshPreview: false);
-
     final file = result.files.single;
     final path = file.path;
     if (path == null) {
       return;
     }
 
-    debugPrint('selected file: $path');
-    final ret = await _openVideoCapture(path);
-    if (!mounted) {
-      return;
-    }
-
+    if (!mounted) return;
     setState(() {
-      src = path;
-      _isPaused = false;
-      if (ret) {
-        width = vc.get(cv.CAP_PROP_FRAME_WIDTH).toInt();
-        height = vc.get(cv.CAP_PROP_FRAME_HEIGHT).toInt();
-        fps = vc.get(cv.CAP_PROP_FPS);
-        backend = vc.getBackendName();
-        _totalFrames = vc.get(cv.CAP_PROP_FRAME_COUNT).toInt();
-        _lastReceivedFrameNum = 0;
-        _statusText = 'Video ready';
-      } else {
-        width = -1;
-        height = -1;
-        fps = -1;
-        backend = 'open-failed';
-        _statusText = 'Failed to open selected video';
-      }
+      _playlistPaths
+        ..clear()
+        ..add(path);
+      _playlistIndex = 0;
     });
-
-    if (ret) {
-      await _refreshPreviewFrame();
-    }
-
-    final dstDir = await getApplicationCacheDirectory();
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      dst = p.join(dstDir.path, 'output.mp4');
-    });
+    await _openPlaylistIndex(0);
   }
 
   Future<void> _seekTo(int frameNum) async {
@@ -662,20 +880,30 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     final target = frameNum.clamp(0, math.max(0, _totalFrames - 1)).toInt();
     _seekingSlider = true;
     _lastReceivedFrameNum = target;
-    unawaited(_seekAudioToFrame(target));
+    // Compute actual ms position from the video rather than fps-based estimate.
+    vc.set(cv.CAP_PROP_POS_FRAMES, target.toDouble());
+    final seekPosMs = vc.get(cv.CAP_PROP_POS_MSEC).round();
+    _lastReceivedPosMs = seekPosMs;
+    unawaited(_seekAudioToMs(seekPosMs));
 
-    if (_isPlaying && _isolateSendPort != null) {
-      _isolateSendPort?.send({'cmd': 'seek', 'frame': target});
+    if (_isPlaying) {
+      // Kill the in-flight isolate immediately (no waiting for current frame to finish)
+      // and restart from the target position. This gives instant seek response.
+      await _killPlaybackIsolate();
       _seekingSlider = false;
       if (mounted) {
         setState(() {
+          _isPlaying = false;
+          _isPaused =
+              true; // _playVideo will resume from _lastReceivedFrameNum = target
           _statusText = 'Seeking...';
         });
       }
+      await _playVideo();
       return;
     }
 
-    vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
+    // Position was already set above for ms calculation; keep it there.
     _seekingSlider = false;
     if (!_processingFrame) {
       _processingFrame = true;
@@ -694,6 +922,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         _processingFrame = false;
         vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
       }
+    } else {
+      // Not processing frame: restore position that was changed for ms read.
+      vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
     }
   }
 
@@ -1038,9 +1269,11 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
 
   @override
   void dispose() {
+    _controlsHideTimer?.cancel();
     unawaited(_killPlaybackIsolate());
     vc.release();
     vw.release();
+    _fullscreenFocusNode.dispose();
     unawaited(
       _audioPlayer.dispose().catchError((e) {
         debugPrint('Audio dispose ignored: $e');
@@ -1068,6 +1301,8 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     'saturation': _saturation,
     'temperature': _temperature,
     'redRecovery': _redRecovery,
+    'greenWaterAutoCorrection': _greenWaterAutoCorrection,
+    'greenWaterStrength': _greenWaterStrength,
     'blueOceanTone': _blueOceanTone,
     'localMaskEnabled': _localMaskEnabled,
     'localMaskStrength': _localMaskStrength,
@@ -1141,13 +1376,17 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         final w = msg['width'] as int?;
         final h = msg['height'] as int?;
         final frameNum = msg['frameNum'] as int?;
+        final posMs = msg['posMs'] as int?;
         if (rgba == null || w == null || h == null) {
           _isolateSendPort?.send({'cmd': 'ack'});
           return;
         }
         if (frameNum != null && !_seekingSlider) {
           _lastReceivedFrameNum = frameNum;
-          unawaited(_maybeFineResyncAudio(frameNum));
+          if (posMs != null) {
+            _lastReceivedPosMs = posMs;
+            unawaited(_maybeFineResyncAudio(posMs));
+          }
         }
 
         if (!mounted || !_isPlaying || session != _playbackSession) {
@@ -1180,6 +1419,11 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         if (!_isPlaying) return;
         await _killPlaybackIsolate();
         await _stopAudioPlayback();
+
+        if (await _openNextPlaylistFile(autoplay: true)) {
+          return;
+        }
+
         if (!mounted) return;
         setState(() {
           _isPlaying = false;
@@ -1202,62 +1446,182 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     });
   }
 
+  void _enterFullscreen() {
+    if (_isFullscreen) return;
+    windowManager.setFullScreen(true);
+    setState(() {
+      _isFullscreen = true;
+      _controlsVisible = true;
+    });
+    _resetControlsHideTimer();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _fullscreenFocusNode.requestFocus();
+    });
+  }
+
+  void _exitFullscreen() {
+    if (!_isFullscreen) return;
+    windowManager.setFullScreen(false);
+    setState(() {
+      _isFullscreen = false;
+      _controlsVisible = true;
+    });
+    _resetControlsHideTimer();
+  }
+
+  void _toggleFullscreen() {
+    if (_isFullscreen) {
+      _exitFullscreen();
+    } else {
+      _enterFullscreen();
+    }
+  }
+
+  void _resetControlsHideTimer() {
+    _controlsHideTimer?.cancel();
+    _controlsHideTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() => _controlsVisible = false);
+      }
+    });
+  }
+
+  void _showControlsTemporarily() {
+    if (!mounted) return;
+    if (!_controlsVisible) {
+      setState(() => _controlsVisible = true);
+    }
+    _resetControlsHideTimer();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: LayoutBuilder(
-          builder: (context, constraints) {
-            return Align(
-              alignment: Alignment.centerLeft,
-              child: SizedBox(
-                width: constraints.maxWidth,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text('Video Correction').color(Colors.white),
+    return Focus(
+      focusNode: _fullscreenFocusNode,
+      autofocus: true,
+      onKeyEvent: (node, event) {
+        if (event is! KeyDownEvent) return KeyEventResult.ignored;
+        final key = event.logicalKey;
+        if (key == LogicalKeyboardKey.escape && _isFullscreen) {
+          _exitFullscreen();
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.space && _hasVideo && !_isSaving) {
+          if (_isPlaying) {
+            _pauseVideo();
+          } else {
+            _playVideo();
+          }
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyN &&
+            _hasNextPlaylistFile &&
+            !_isSaving) {
+          final shouldAutoplay = _isPlaying;
+          unawaited(_openNextPlaylistFile(autoplay: shouldAutoplay));
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyP &&
+            _hasPrevPlaylistFile &&
+            !_isSaving) {
+          final shouldAutoplay = _isPlaying;
+          unawaited(_openPrevPlaylistFile(autoplay: shouldAutoplay));
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Scaffold(
+        appBar: _isFullscreen
+            ? null
+            : AppBar(
+                title: LayoutBuilder(
+                  builder: (context, constraints) {
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: SizedBox(
+                        width: constraints.maxWidth,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: Text('Video Correction').color(Colors.white),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                leading: IconButton(
+                  icon: const Icon(Icons.home, color: Colors.white, size: 30),
+                  onPressed: () {
+                    context.goNamed(RoutePage.splash.name);
+                  },
+                ),
+                actions: [
+                  IconButton(
+                    tooltip: 'Select video',
+                    onPressed: _isSaving ? null : _selectVideo,
+                    icon: const Icon(Icons.video_file, color: Colors.white),
+                  ),
+                  IconButton(
+                    tooltip: 'Select folder',
+                    onPressed: _isSaving ? null : _selectFolder,
+                    icon: const Icon(Icons.folder_open, color: Colors.white),
+                  ),
+                  IconButton(
+                    tooltip: 'Save corrected video',
+                    onPressed: (_hasVideo && !_isSaving)
+                        ? _saveEditedVideo
+                        : null,
+                    icon: const Icon(Icons.save_alt, color: Colors.white),
+                  ),
+                ],
+                backgroundColor: colorMain,
+              ),
+        body: Stack(
+          children: [
+            SafeArea(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: _buildMainContent(),
+                    ),
+                  ),
+                  if (!_isFullscreen)
+                    Container(
+                      width: 360,
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        border: Border(left: BorderSide(color: Colors.black12)),
+                      ),
+                      child: _buildControlPanel(),
+                    ),
+                ],
+              ),
+            ),
+            if (_isFullscreen)
+              Positioned.fill(
+                child: ColoredBox(
+                  color: Colors.black,
+                  child: Stack(
+                    children: [
+                      Center(child: _buildVideoSurface()),
+                      Positioned(
+                        top: 12,
+                        right: 12,
+                        child: IconButton(
+                          tooltip: 'Exit fullscreen (Esc)',
+                          onPressed: _exitFullscreen,
+                          icon: const Icon(
+                            Icons.fullscreen_exit,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            );
-          },
-        ),
-        leading: IconButton(
-          icon: const Icon(Icons.home, color: Colors.white, size: 30),
-          onPressed: () {
-            context.goNamed(RoutePage.splash.name);
-          },
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Select video',
-            onPressed: _isSaving ? null : _selectVideo,
-            icon: const Icon(Icons.folder_open, color: Colors.white),
-          ),
-          IconButton(
-            tooltip: 'Save corrected video',
-            onPressed: (_hasVideo && !_isSaving) ? _saveEditedVideo : null,
-            icon: const Icon(Icons.save_alt, color: Colors.white),
-          ),
-        ],
-        backgroundColor: colorMain,
-      ),
-      body: SafeArea(
-        child: Row(
-          children: [
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: _buildMainContent(),
-              ),
-            ),
-            Container(
-              width: 360,
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                border: Border(left: BorderSide(color: Colors.black12)),
-              ),
-              child: _buildControlPanel(),
-            ),
           ],
         ),
       ),
@@ -1265,6 +1629,13 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   }
 
   Widget _buildMainContent() {
+    final currentFileName = (src == null || src!.isEmpty)
+        ? '-'
+        : p.basename(src!);
+    final playlistLabel = (_playlistPaths.isNotEmpty && _playlistIndex >= 0)
+        ? '${_playlistIndex + 1}/${_playlistPaths.length}'
+        : '-';
+
     return Column(
       children: [
         if (_isSaving)
@@ -1281,6 +1652,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
             Text('size: ${width > 0 ? '$width x $height' : '-'}'),
             Text('fps: ${fps > 0 ? fps.toStringAsFixed(2) : '-'}'),
             Text('backend: $backend'),
+            Text('file: $playlistLabel  $currentFileName'),
           ],
         ),
         const SizedBox(height: 12),
@@ -1434,6 +1806,32 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                 onChangeEnd: (_) => _refreshPreviewFrame(),
               ),
               SwitchListTile(
+                value: _greenWaterAutoCorrection,
+                title: const Text('Enable green-water auto correction'),
+                subtitle: const Text('Apply magenta compensation'),
+                onChanged: (v) {
+                  setState(() {
+                    _greenWaterAutoCorrection = v;
+                  });
+                  _pushRealtimeParamsToIsolate();
+                  _refreshPreviewFrame();
+                },
+              ),
+              _sliderTile(
+                title: 'Green-water correction strength',
+                value: _greenWaterStrength,
+                min: 0,
+                max: 1,
+                divisions: 20,
+                label: _greenWaterStrength.toStringAsFixed(2),
+                enabled: _greenWaterAutoCorrection,
+                onChanged: (v) {
+                  setState(() => _greenWaterStrength = v);
+                  _pushRealtimeParamsToIsolate();
+                },
+                onChangeEnd: (_) => _refreshPreviewFrame(),
+              ),
+              SwitchListTile(
                 value: _localMaskEnabled,
                 title: const Text('Enable local mask (highlight protection)'),
                 onChanged: (v) {
@@ -1531,6 +1929,8 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                             _saturation = 1.12;
                             _temperature = 10;
                             _redRecovery = 1.05;
+                            _greenWaterAutoCorrection = false;
+                            _greenWaterStrength = 0.55;
                             _localMaskEnabled = false;
                             _localMaskStrength = 0.55;
                             _blueOceanTone = 1.12;
@@ -1570,149 +1970,239 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         ? (_lastReceivedFrameNum / _totalFrames).clamp(0.0, 1.0)
         : 0.0;
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        ColoredBox(
-          color: Colors.black,
-          child: _currentFrame == null
-              ? const Center(
-                  child: Text(
-                    'Select a video',
-                    style: TextStyle(color: Colors.white70, fontSize: 18),
-                  ),
-                )
-              : RawImage(
-                  image: _currentFrame,
-                  fit: BoxFit.contain,
-                  filterQuality: FilterQuality.medium,
-                ),
-        ),
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: DecoratedBox(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Colors.transparent, Colors.black87],
-              ),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 20, 10, 8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 2.5,
-                      activeTrackColor: Colors.white,
-                      inactiveTrackColor: Colors.white30,
-                      thumbColor: Colors.white,
-                      overlayColor: Colors.white24,
-                      thumbShape: const RoundSliderThumbShape(
-                        enabledThumbRadius: 6,
-                      ),
+    return MouseRegion(
+      onHover: (_) => _showControlsTemporarily(),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ColoredBox(
+            color: Colors.black,
+            child: _currentFrame == null
+                ? const Center(
+                    child: Text(
+                      'Select a video',
+                      style: TextStyle(color: Colors.white70, fontSize: 18),
                     ),
-                    child: Slider(
-                      value: progress,
-                      onChanged: (_hasVideo && !_isSaving)
-                          ? (v) {
-                              setState(() {
-                                _seekingSlider = true;
-                                _lastReceivedFrameNum = (_totalFrames * v)
-                                    .round();
-                              });
-                            }
-                          : null,
-                      onChangeEnd: (_hasVideo && !_isSaving)
-                          ? (v) => _seekTo((_totalFrames * v).round())
-                          : null,
-                    ),
+                  )
+                : RawImage(
+                    image: _currentFrame,
+                    fit: BoxFit.contain,
+                    filterQuality: FilterQuality.medium,
                   ),
-                  Row(
+          ),
+          if (_isAnalysing)
+            Positioned(
+              top: 12,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      IconButton(
-                        tooltip: _isPlaying ? 'Pause' : 'Play',
-                        onPressed: (!_hasVideo || _isSaving)
-                            ? null
-                            : (_isPlaying ? _pauseVideo : _playVideo),
-                        icon: Icon(
-                          _isPlaying
-                              ? Icons.pause_circle_filled
-                              : Icons.play_circle_fill,
-                          color: Colors.white,
-                          size: 34,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Stop',
-                        onPressed:
-                            (!_hasVideo ||
-                                _isSaving ||
-                                (!_isPlaying && !_isPaused))
-                            ? null
-                            : _stopVideo,
-                        icon: const Icon(
-                          Icons.stop_circle,
-                          color: Colors.white,
-                          size: 30,
-                        ),
-                      ),
-                      Text(
-                        '${fmtFrameToTime(_lastReceivedFrameNum)} / ${fmtFrameToTime(_totalFrames)}',
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 12,
-                        ),
-                      ),
-                      const Spacer(),
-                      Icon(
-                        _audioVolume == 0 ? Icons.volume_off : Icons.volume_up,
-                        color: Colors.white,
-                        size: 18,
-                      ),
                       SizedBox(
-                        width: 92,
-                        child: SliderTheme(
-                          data: SliderTheme.of(context).copyWith(
-                            trackHeight: 2,
-                            activeTrackColor: Colors.white,
-                            inactiveTrackColor: Colors.white24,
-                            thumbColor: Colors.white,
-                            overlayColor: Colors.white24,
-                            thumbShape: const RoundSliderThumbShape(
-                              enabledThumbRadius: 5,
-                            ),
-                            overlayShape: const RoundSliderOverlayShape(
-                              overlayRadius: 10,
-                            ),
-                          ),
-                          child: Slider(
-                            value: _audioVolume,
-                            min: 0,
-                            max: 1,
-                            onChanged: (_isSaving || !_hasVideo)
-                                ? null
-                                : (value) {
-                                    setState(() => _audioVolume = value);
-                                    unawaited(
-                                      _audioPlayer.setVolume(value * 100.0),
-                                    );
-                                  },
-                          ),
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white70,
                         ),
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        'Analysing...',
+                        style: TextStyle(color: Colors.white, fontSize: 13),
                       ),
                     ],
                   ),
-                ],
+                ),
+              ),
+            ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: AnimatedOpacity(
+              opacity: _controlsVisible ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 300),
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Colors.black87],
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 20, 10, 8),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 2.5,
+                          activeTrackColor: Colors.white,
+                          inactiveTrackColor: Colors.white30,
+                          thumbColor: Colors.white,
+                          overlayColor: Colors.white24,
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 6,
+                          ),
+                        ),
+                        child: Slider(
+                          value: progress,
+                          onChanged: (_hasVideo && !_isSaving)
+                              ? (v) {
+                                  setState(() {
+                                    _seekingSlider = true;
+                                    _lastReceivedFrameNum = (_totalFrames * v)
+                                        .round();
+                                  });
+                                }
+                              : null,
+                          onChangeEnd: (_hasVideo && !_isSaving)
+                              ? (v) => _seekTo((_totalFrames * v).round())
+                              : null,
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          IconButton(
+                            tooltip: 'Previous file',
+                            onPressed: (_isSaving || !_hasPrevPlaylistFile)
+                                ? null
+                                : () async {
+                                    final shouldAutoplay = _isPlaying;
+                                    await _openPrevPlaylistFile(
+                                      autoplay: shouldAutoplay,
+                                    );
+                                  },
+                            icon: const Icon(
+                              Icons.skip_previous,
+                              color: Colors.white,
+                              size: 28,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: _isPlaying ? 'Pause' : 'Play',
+                            onPressed: (!_hasVideo || _isSaving)
+                                ? null
+                                : (_isPlaying ? _pauseVideo : _playVideo),
+                            icon: Icon(
+                              _isPlaying
+                                  ? Icons.pause_circle_filled
+                                  : Icons.play_circle_fill,
+                              color: Colors.white,
+                              size: 34,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Stop',
+                            onPressed:
+                                (!_hasVideo ||
+                                    _isSaving ||
+                                    (!_isPlaying && !_isPaused))
+                                ? null
+                                : _stopVideo,
+                            icon: const Icon(
+                              Icons.stop_circle,
+                              color: Colors.white,
+                              size: 30,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Next file',
+                            onPressed: (_isSaving || !_hasNextPlaylistFile)
+                                ? null
+                                : () async {
+                                    final shouldAutoplay = _isPlaying;
+                                    await _openNextPlaylistFile(
+                                      autoplay: shouldAutoplay,
+                                    );
+                                  },
+                            icon: const Icon(
+                              Icons.skip_next,
+                              color: Colors.white,
+                              size: 28,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: _isFullscreen
+                                ? 'Exit fullscreen (Esc)'
+                                : 'Fullscreen',
+                            onPressed: _hasVideo ? _toggleFullscreen : null,
+                            icon: Icon(
+                              _isFullscreen
+                                  ? Icons.fullscreen_exit
+                                  : Icons.fullscreen,
+                              color: Colors.white,
+                              size: 28,
+                            ),
+                          ),
+                          Text(
+                            '${fmtFrameToTime(_lastReceivedFrameNum)} / ${fmtFrameToTime(_totalFrames)}',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                          const Spacer(),
+                          Icon(
+                            _audioVolume == 0
+                                ? Icons.volume_off
+                                : Icons.volume_up,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                          SizedBox(
+                            width: 92,
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                trackHeight: 2,
+                                activeTrackColor: Colors.white,
+                                inactiveTrackColor: Colors.white24,
+                                thumbColor: Colors.white,
+                                overlayColor: Colors.white24,
+                                thumbShape: const RoundSliderThumbShape(
+                                  enabledThumbRadius: 5,
+                                ),
+                                overlayShape: const RoundSliderOverlayShape(
+                                  overlayRadius: 10,
+                                ),
+                              ),
+                              child: Slider(
+                                value: _audioVolume,
+                                min: 0,
+                                max: 1,
+                                onChanged: (_isSaving || !_hasVideo)
+                                    ? null
+                                    : (value) {
+                                        setState(() => _audioVolume = value);
+                                        unawaited(
+                                          _audioPlayer.setVolume(value * 100.0),
+                                        );
+                                      },
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -1815,7 +2305,8 @@ Future<void> _playbackIsolateEntry(List<dynamic> args) async {
   if (startFrame > 0) {
     vc.set(cv.CAP_PROP_POS_FRAMES, startFrame.toDouble());
   }
-  var timelineBaseFrame = startFrame;
+  var localFrameCount =
+      0; // counts frames sent; used for timing instead of CAP_PROP_POS_FRAMES
   final playbackClock = Stopwatch()..start();
 
   const hdWidth = 960;
@@ -1851,13 +2342,16 @@ Future<void> _playbackIsolateEntry(List<dynamic> args) async {
     final h = rgba.height;
     rgba.dispose();
 
+    localFrameCount++;
     final frameNum = vc.get(cv.CAP_PROP_POS_FRAMES).round() - 1;
+    final posMs = vc.get(cv.CAP_PROP_POS_MSEC).round();
     mainPort.send({
       'type': 'frame',
       'rgba': rgbaBytes,
       'width': w,
       'height': h,
       'frameNum': frameNum,
+      'posMs': posMs,
     });
 
     var stopRequested = false;
@@ -1887,7 +2381,7 @@ Future<void> _playbackIsolateEntry(List<dynamic> args) async {
       if (c == 'seek') {
         final seekFrame = cmd['frame'] as int? ?? 0;
         vc.set(cv.CAP_PROP_POS_FRAMES, seekFrame.toDouble());
-        timelineBaseFrame = seekFrame;
+        localFrameCount = 0;
         playbackClock
           ..reset()
           ..start();
@@ -1903,8 +2397,7 @@ Future<void> _playbackIsolateEntry(List<dynamic> args) async {
     if (seekRequested) continue;
 
     final elapsedUs = playbackClock.elapsedMicroseconds;
-    final playedFrameCount = math.max(0, frameNum - timelineBaseFrame + 1);
-    final targetElapsedUs = playedFrameCount * frameIntervalUs;
+    final targetElapsedUs = localFrameCount * frameIntervalUs;
     final waitUs = targetElapsedUs - elapsedUs;
     if (waitUs > 0) {
       await Future<void>.delayed(Duration(microseconds: waitUs));
@@ -2038,6 +2531,46 @@ Future<cv.Mat> _applyRealtimeCorrections(
       working = mixed;
     }
     beforeAuto.dispose();
+  }
+
+  final greenWaterAutoCorrection =
+      params['greenWaterAutoCorrection'] as bool? ?? false;
+  if (greenWaterAutoCorrection) {
+    final greenWaterStrength = params['greenWaterStrength'] as double? ?? 0.55;
+    final bgr = await cv.splitAsync(working);
+    final b = bgr[0];
+    final g = bgr[1];
+    final r = bgr[2];
+
+    final bMean = b.mean().val1;
+    final gMean = g.mean().val1;
+    final rMean = r.mean().val1;
+    final rgAvg = (rMean + bMean) / 2.0;
+    final greenBias = ((gMean - rgAvg) / math.max(gMean, 1.0)).clamp(0.0, 1.0);
+    final mix = (greenWaterStrength * (0.35 + 0.65 * greenBias)).clamp(
+      0.0,
+      1.0,
+    );
+
+    final greenReduce = (1.0 - mix * 0.14).clamp(0.82, 1.0);
+    final redBoost = (1.0 + mix * 0.12).clamp(1.0, 1.22);
+    final blueBoost = (1.0 + mix * 0.08).clamp(1.0, 1.16);
+
+    final bAdj = await cv.convertScaleAbsAsync(b, alpha: blueBoost);
+    final gAdj = await cv.convertScaleAbsAsync(g, alpha: greenReduce);
+    final rAdj = await cv.convertScaleAbsAsync(r, alpha: redBoost);
+    final magentaBalanced = await cv.mergeAsync(
+      cv.VecMat.fromList([bAdj, gAdj, rAdj]),
+    );
+
+    b.dispose();
+    g.dispose();
+    r.dispose();
+    bAdj.dispose();
+    gAdj.dispose();
+    rAdj.dispose();
+    if (!identical(working, inputFrame)) working.dispose();
+    working = magentaBalanced;
   }
 
   final contrast = math.min(params['contrast'] as double? ?? 1.2, 1.12);
