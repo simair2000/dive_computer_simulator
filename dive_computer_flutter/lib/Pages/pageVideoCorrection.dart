@@ -92,6 +92,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   double _blueOceanTone = 1.12;
   bool _particleReduction = false;
   double _particleReductionStrength = 0.55;
+  bool _previewMatchMode = true;
   double _audioVolume = 1.0;
   bool _audioEnabled = true;
   bool _controlsVisible = true;
@@ -122,6 +123,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     _particleReductionStrength = APref.getData(
       AprefKey.VC_PARTICLE_REDUCTION_STRENGTH,
     );
+    _previewMatchMode = APref.getData(AprefKey.VC_PREVIEW_MATCH_MODE);
     _audioVolume = APref.getData(AprefKey.VC_AUDIO_VOLUME);
   }
 
@@ -917,7 +919,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       }
 
       final preview = await _resizeForPreview(frame);
-      final corrected = await _applyCorrections(preview);
+      final corrected = _previewMatchMode
+          ? await _applyExportCorrections(preview, _buildCorrectionParams())
+          : await _applyCorrections(preview, realtime: true);
       final image = await _cvMatToImage(corrected);
       if (!identical(preview, frame)) {
         preview.dispose();
@@ -996,7 +1000,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       try {
         final (ok, frame) = await vc.readAsync();
         if (ok && frame.width > 0) {
-          final corrected = await _applyCorrections(frame);
+          final corrected = _previewMatchMode
+              ? await _applyExportCorrections(frame, _buildCorrectionParams())
+              : await _applyCorrections(frame, realtime: true);
           final image = await _cvMatToImage(corrected);
           frame.dispose();
           corrected.dispose();
@@ -1077,6 +1083,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       AprefKey.VC_PARTICLE_REDUCTION_STRENGTH,
       _particleReductionStrength,
     );
+    await APref.setData(AprefKey.VC_PREVIEW_MATCH_MODE, _previewMatchMode);
     await APref.setData(AprefKey.VC_AUDIO_VOLUME, _audioVolume);
     if (mounted) {
       ScaffoldMessenger.of(
@@ -1427,6 +1434,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     'localMaskStrength': _localMaskStrength,
     'particleReduction': _particleReduction,
     'particleReductionStrength': _particleReductionStrength,
+    'previewMatchMode': _previewMatchMode,
   };
 
   Future<Map<String, dynamic>> _exportVideoWithFfmpeg({
@@ -1942,16 +1950,36 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                 final aspect = _videoAspectRatio;
                 var videoWidth = constraints.maxWidth;
                 var videoHeight = videoWidth / aspect;
-                if (videoHeight > constraints.maxHeight) {
-                  videoHeight = constraints.maxHeight;
+                const verticalPadding = 38.0;
+                final maxVideoHeight = math.max(
+                  1.0,
+                  constraints.maxHeight - verticalPadding,
+                );
+                if (videoHeight > maxVideoHeight) {
+                  videoHeight = maxVideoHeight;
                   videoWidth = videoHeight * aspect;
                 }
 
-                return AnimatedContainer(
+                final previewWidget = AnimatedContainer(
                   duration: const Duration(milliseconds: 180),
                   width: videoWidth,
                   height: videoHeight,
                   child: _previewContainer(child: _buildVideoSurface()),
+                );
+
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: videoWidth,
+                      child: Align(
+                        alignment: Alignment.topRight,
+                        child: _buildPreviewMatchToggle(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    previewWidget,
+                  ],
                 );
               },
             ),
@@ -2201,6 +2229,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                       ? null
                       : () async {
                           setState(() {
+                            _previewMatchMode = true;
                             _autoCorrection = true;
                             _autoStrength = 0.62;
                             _contrast = 1.2;
@@ -2503,6 +2532,40 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     );
   }
 
+  Widget _buildPreviewMatchToggle() {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.black12),
+        boxShadow: const [
+          BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Preview Match', style: TextStyle(fontSize: 12)),
+            Switch.adaptive(
+              value: _previewMatchMode,
+              onChanged: (_isSaving || !_hasVideo)
+                  ? null
+                  : (v) {
+                      setState(() {
+                        _previewMatchMode = v;
+                      });
+                      _pushRealtimeParamsToIsolate();
+                      _refreshPreviewFrame();
+                    },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _sliderTile({
     required String title,
     required double value,
@@ -2596,21 +2659,22 @@ Future<void> _playbackIsolateEntry(List<dynamic> args) async {
       break;
     }
 
-    cv.Mat frame;
-    if (raw.width > hdWidth || raw.height > hdHeight) {
-      final scaleW = hdWidth / raw.width;
-      final scaleH = hdHeight / raw.height;
-      final scale = math.min(scaleW, scaleH);
-      final tw = math.max(1, (raw.width * scale).round());
-      final th = math.max(1, (raw.height * scale).round());
-      frame = await cv.resizeAsync(raw, (tw, th));
-      raw.dispose();
-    } else {
-      frame = raw;
-    }
+    final previewMatchMode = params['previewMatchMode'] as bool? ?? true;
+    final correctedFull = previewMatchMode
+        ? await _applyExportCorrections(raw, params)
+        : await _applyRealtimeCorrections(raw, params);
+    raw.dispose();
 
-    final corrected = await _applyRealtimeCorrections(frame, params);
-    if (!identical(corrected, frame)) frame.dispose();
+    cv.Mat corrected = correctedFull;
+    if (corrected.width > hdWidth || corrected.height > hdHeight) {
+      final scaleW = hdWidth / corrected.width;
+      final scaleH = hdHeight / corrected.height;
+      final scale = math.min(scaleW, scaleH);
+      final tw = math.max(1, (corrected.width * scale).round());
+      final th = math.max(1, (corrected.height * scale).round());
+      corrected = await cv.resizeAsync(correctedFull, (tw, th));
+      correctedFull.dispose();
+    }
 
     final rgba = await cv.cvtColorAsync(corrected, cv.COLOR_BGR2RGBA);
     corrected.dispose();

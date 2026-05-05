@@ -26,6 +26,7 @@ enum AprefKey {
   VC_BLUE_OCEAN_TONE(1.12),
   VC_PARTICLE_REDUCTION(false),
   VC_PARTICLE_REDUCTION_STRENGTH(0.55),
+  VC_PREVIEW_MATCH_MODE(true),
   VC_AUDIO_VOLUME(1.0);
 
   final dynamic defValue;
