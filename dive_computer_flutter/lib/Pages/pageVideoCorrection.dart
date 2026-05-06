@@ -1022,12 +1022,17 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       // Not processing frame: restore position that was changed for ms read.
       vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
     }
+    // If the isolate is alive (paused), sync it to the new position so resume
+    // continues from here instead of the old pre-seek position.
+    _isolateSendPort?.send({'cmd': 'seek', 'frame': target});
   }
 
   Future<void> _pauseVideo() async {
     if (!_isPlaying) return;
 
-    _playbackSession += 1;
+    // Do NOT increment _playbackSession — the existing listener must stay valid
+    // so it can continue to receive 'done'/'error' while paused, and frames
+    // after resume without re-attaching.
     if (mounted) {
       setState(() {
         _isPlaying = false;
@@ -1035,7 +1040,12 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         _statusText = 'Paused';
       });
     }
-    await _killPlaybackIsolate();
+    // Send 'pause' to isolate; keep subscription/port/sendPort alive.
+    if (_isolateSendPort != null) {
+      _isolateSendPort!.send({'cmd': 'pause'});
+    } else {
+      await _killPlaybackIsolate();
+    }
     try {
       await _audioPlayer.pause();
     } catch (e) {
@@ -1680,52 +1690,10 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     });
   }
 
-  Future<void> _playVideo() async {
-    if (!_hasVideo || _isSaving || _isPlaying) {
-      debugPrint('No video selected or video not opened');
-      return;
-    }
-
-    final resume = _isPaused;
-    final targetFps = fps > 1 ? fps : 30.0;
-    final startFrame = resume ? _lastReceivedFrameNum : 0;
-    _playbackSession += 1;
-    final session = _playbackSession;
-
-    setState(() {
-      _isPlaying = true;
-      _isPaused = false;
-      _statusText = 'Playing';
-    });
-
-    // Kill any existing worker isolate
-    await _killPlaybackIsolate();
-
-    _fromIsolatePort = ReceivePort();
-    final params = _buildCorrectionParams();
-    final videoPath = _openedSrcPath!;
-
-    _playbackIsolate = await Isolate.spawn(_playbackIsolateEntry, [
-      _fromIsolatePort!.sendPort,
-      videoPath,
-      startFrame,
-      targetFps,
-      params,
-    ]);
-
-    // Do not block playback startup on audio initialization.
-    unawaited(() async {
-      if (resume) {
-        try {
-          await _audioPlayer.play();
-        } catch (e) {
-          debugPrint('Audio resume failed: $e');
-        }
-      } else {
-        await _startAudioForPlayback();
-      }
-    }());
-
+  /// Attaches the playback isolate listener to [_fromIsolatePort] for [session].
+  /// Extracted so the same listener logic can be reused for fast-resume
+  /// (re-attach without re-spawning the isolate).
+  void _attachPlaybackIsolateListener(int session) {
     _isolateSub = _fromIsolatePort!.listen((msg) async {
       if (session != _playbackSession) return;
       if (msg is! Map) return;
@@ -1777,7 +1745,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         _isolateSendPort?.send({'cmd': 'ack'});
       } else if (type == 'done') {
         if (!mounted) return;
-        // If pause was requested, the isolate was already killed; ignore stale 'done'.
+        // If pause was requested, the isolate is still alive; ignore stale 'done'.
         if (!_isPlaying) return;
         await _killPlaybackIsolate();
         await _stopAudioPlayback();
@@ -1806,6 +1774,77 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         });
       }
     });
+  }
+
+  Future<void> _playVideo() async {
+    if (!_hasVideo || _isSaving || _isPlaying) {
+      debugPrint('No video selected or video not opened');
+      return;
+    }
+
+    final resume = _isPaused;
+
+    // Fast-resume path: isolate is still alive (kept alive by _pauseVideo).
+    // The existing listener and ReceivePort are intact — just send 'resume'.
+    // Do NOT increment _playbackSession; the existing session remains valid.
+    if (resume && _isolateSendPort != null && _fromIsolatePort != null) {
+      setState(() {
+        _isPlaying = true;
+        _isPaused = false;
+        _statusText = 'Playing';
+      });
+      _isolateSendPort!.send({'cmd': 'resume'});
+      unawaited(() async {
+        try {
+          await _audioPlayer.play();
+        } catch (e) {
+          debugPrint('Audio resume failed: $e');
+        }
+      }());
+      return;
+    }
+
+    // Fresh start: increment session to invalidate any stale callbacks,
+    // then kill any existing isolate and spawn a new one.
+    _playbackSession += 1;
+    final session = _playbackSession;
+
+    setState(() {
+      _isPlaying = true;
+      _isPaused = false;
+      _statusText = 'Playing';
+    });
+
+    final targetFps = fps > 1 ? fps : 30.0;
+    final startFrame = resume ? _lastReceivedFrameNum : 0;
+    await _killPlaybackIsolate();
+
+    _fromIsolatePort = ReceivePort();
+    final params = _buildCorrectionParams();
+    final videoPath = _openedSrcPath!;
+
+    _playbackIsolate = await Isolate.spawn(_playbackIsolateEntry, [
+      _fromIsolatePort!.sendPort,
+      videoPath,
+      startFrame,
+      targetFps,
+      params,
+    ]);
+
+    // Do not block playback startup on audio initialization.
+    unawaited(() async {
+      if (resume) {
+        try {
+          await _audioPlayer.play();
+        } catch (e) {
+          debugPrint('Audio resume failed: $e');
+        }
+      } else {
+        await _startAudioForPlayback();
+      }
+    }());
+
+    _attachPlaybackIsolateListener(session);
   }
 
   void _enterFullscreen() {
@@ -1898,6 +1937,10 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
             !_isSaving) {
           final shouldAutoplay = _isPlaying;
           unawaited(_openPrevPlaylistFile(autoplay: shouldAutoplay));
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyF && _hasVideo && !_isSaving) {
+          _toggleFullscreen();
           return KeyEventResult.handled;
         }
         return KeyEventResult.ignored;
@@ -2864,6 +2907,48 @@ Future<void> _playbackIsolateEntry(List<dynamic> args) async {
       }
       if (c == 'ack') {
         break;
+      }
+      if (c == 'pause') {
+        // Enter nested wait until the main thread sends 'resume', 'stop', or 'seek'.
+        while (true) {
+          if (!await commands.moveNext()) {
+            stopRequested = true;
+            break;
+          }
+          final resumeCmd = commands.current;
+          if (resumeCmd is! Map) continue;
+          final rc = resumeCmd['cmd'] as String?;
+          if (rc == 'stop') {
+            stopRequested = true;
+            break;
+          }
+          if (rc == 'updateParams') {
+            final updated = resumeCmd['params'];
+            if (updated is Map) {
+              params = Map<String, dynamic>.from(updated);
+            }
+            continue;
+          }
+          if (rc == 'seek') {
+            final seekFrame = resumeCmd['frame'] as int? ?? 0;
+            vc.set(cv.CAP_PROP_POS_FRAMES, seekFrame.toDouble());
+            localFrameCount = 0;
+            playbackClock
+              ..reset()
+              ..start();
+            seekRequested = true;
+            break;
+          }
+          if (rc == 'resume') {
+            // Reset the playback clock so timing debt doesn't pile up while paused.
+            localFrameCount = 0;
+            playbackClock
+              ..reset()
+              ..start();
+            break; // fall through to outer break (ack-equivalent)
+          }
+        }
+        break; // exit outer command loop — outer loop sends no ack on pause/resume
       }
     }
 
