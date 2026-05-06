@@ -2649,8 +2649,8 @@ Future<void> _playbackIsolateEntry(List<dynamic> args) async {
       0; // counts frames sent; used for timing instead of CAP_PROP_POS_FRAMES
   final playbackClock = Stopwatch()..start();
 
-  const hdWidth = 960;
-  const hdHeight = 540;
+  const previewWidth = 1280;
+  const previewHeight = 720;
 
   while (true) {
     final (success, raw) = await vc.readAsync();
@@ -2660,21 +2660,31 @@ Future<void> _playbackIsolateEntry(List<dynamic> args) async {
     }
 
     final previewMatchMode = params['previewMatchMode'] as bool? ?? true;
-    final correctedFull = previewMatchMode
-        ? await _applyExportCorrections(raw, params)
-        : await _applyRealtimeCorrections(raw, params);
-    raw.dispose();
 
-    cv.Mat corrected = correctedFull;
-    if (corrected.width > hdWidth || corrected.height > hdHeight) {
-      final scaleW = hdWidth / corrected.width;
-      final scaleH = hdHeight / corrected.height;
+    // Match OFF: resize raw frame to 720p BEFORE correction to dramatically
+    // reduce pixel count (e.g. 6K→720p is ~46x fewer pixels).
+    cv.Mat frameToProcess = raw;
+    cv.Mat? rawResized;
+    if (!previewMatchMode &&
+        (raw.width > previewWidth || raw.height > previewHeight)) {
+      final scaleW = previewWidth / raw.width;
+      final scaleH = previewHeight / raw.height;
       final scale = math.min(scaleW, scaleH);
-      final tw = math.max(1, (corrected.width * scale).round());
-      final th = math.max(1, (corrected.height * scale).round());
-      corrected = await cv.resizeAsync(correctedFull, (tw, th));
-      correctedFull.dispose();
+      final tw = math.max(1, (raw.width * scale).round());
+      final th = math.max(1, (raw.height * scale).round());
+      rawResized = await cv.resizeAsync(raw, (
+        tw,
+        th,
+      ), interpolation: cv.INTER_LINEAR);
+      frameToProcess = rawResized;
     }
+
+    final corrected = previewMatchMode
+        ? await _applyExportCorrections(frameToProcess, params)
+        : await _applyRealtimeCorrections(frameToProcess, params);
+
+    rawResized?.dispose();
+    raw.dispose();
 
     final rgba = await cv.cvtColorAsync(corrected, cv.COLOR_BGR2RGBA);
     corrected.dispose();
@@ -2742,8 +2752,7 @@ Future<void> _playbackIsolateEntry(List<dynamic> args) async {
     final diffUs = targetElapsedUs - elapsedUs;
 
     // When ahead of schedule, wait to maintain target fps.
-    // When behind (heavy decode/correction), just proceed immediately without
-    // skipping frames – avoids visual stuttering on 4K sources.
+    // When behind, proceed immediately — no frame skipping to avoid choppiness.
     if (diffUs > 0) {
       await Future<void>.delayed(Duration(microseconds: diffUs));
     }
