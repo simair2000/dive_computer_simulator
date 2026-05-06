@@ -1842,16 +1842,16 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                         : null,
                     icon: const Icon(Icons.save_alt, color: Colors.white),
                   ),
-                  IconButton(
-                    tooltip: 'Open saved folder in Explorer',
-                    onPressed: (dst != null && !_isSaving)
-                        ? _openSavedFolderInExplorer
-                        : null,
-                    icon: const Icon(
-                      Icons.folder_open_outlined,
-                      color: Colors.white,
-                    ),
-                  ),
+                  // IconButton(
+                  //   tooltip: 'Open saved folder in Explorer',
+                  //   onPressed: (dst != null && !_isSaving)
+                  //       ? _openSavedFolderInExplorer
+                  //       : null,
+                  //   icon: const Icon(
+                  //     Icons.folder_open_outlined,
+                  //     color: Colors.white,
+                  //   ),
+                  // ),
                   // IconButton(
                   //   tooltip: 'Save correction settings',
                   //   onPressed: !_isSaving ? _saveSettings : null,
@@ -1972,9 +1972,22 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                   children: [
                     SizedBox(
                       width: videoWidth,
-                      child: Align(
-                        alignment: Alignment.topRight,
-                        child: _buildPreviewMatchToggle(),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          IconButton(
+                            tooltip: 'Open saved folder in Explorer',
+                            onPressed: (dst != null && !_isSaving)
+                                ? _openSavedFolderInExplorer
+                                : null,
+                            icon: Icon(
+                              Icons.folder_open_outlined,
+                              color: colorMain,
+                              size: 30,
+                            ),
+                          ),
+                          _buildPreviewMatchToggle(),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 8),
