@@ -1092,6 +1092,109 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     }
   }
 
+  Future<void> _saveCurrentSceneAsPng() async {
+    if (_openedSrcPath == null || src == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No frame to capture.')));
+      return;
+    }
+
+    final sourceName = src == null ? 'scene' : p.basenameWithoutExtension(src!);
+    final frameNumber = _lastReceivedFrameNum.clamp(0, 999999999);
+    final defaultName =
+        '${sourceName}_frame_${frameNumber.toString().padLeft(6, '0')}.png';
+    final initialDirectory = src == null ? null : p.dirname(src!);
+
+    final requestedPath = await FilePicker.saveFile(
+      dialogTitle: 'Save current scene as PNG',
+      fileName: defaultName,
+      initialDirectory: initialDirectory,
+      lockParentWindow: true,
+      type: FileType.custom,
+      allowedExtensions: const ['png'],
+    );
+
+    if (requestedPath == null) {
+      if (!mounted) return;
+      setState(() {
+        _statusText = 'PNG save cancelled.';
+      });
+      return;
+    }
+
+    final outputPath = p.extension(requestedPath).toLowerCase() == '.png'
+        ? requestedPath
+        : '$requestedPath.png';
+
+    setState(() {
+      _statusText = 'Rendering original-resolution PNG...';
+    });
+
+    final capture = cv.VideoCapture.fromFile(_openedSrcPath!);
+    if (!capture.isOpened) {
+      capture.dispose();
+      if (!mounted) return;
+      setState(() {
+        _statusText = 'Failed to open source frame for PNG capture.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to open source video.')),
+      );
+      return;
+    }
+
+    capture.set(cv.CAP_PROP_POS_FRAMES, frameNumber.toDouble());
+    final (ok, sourceFrame) = await capture.readAsync();
+    capture.dispose();
+    if (!ok || sourceFrame.width == 0 || sourceFrame.height == 0) {
+      sourceFrame.dispose();
+      if (!mounted) return;
+      setState(() {
+        _statusText = 'Failed to read source frame for PNG capture.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to read source frame.')),
+      );
+      return;
+    }
+
+    final corrected = _previewMatchMode
+        ? await _applyExportCorrections(sourceFrame, _buildCorrectionParams())
+        : await _applyCorrections(sourceFrame, realtime: false);
+    final image = await _cvMatToImage(corrected);
+    sourceFrame.dispose();
+    corrected.dispose();
+
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    if (byteData == null) {
+      if (!mounted) return;
+      setState(() {
+        _statusText = 'Failed to encode current frame as PNG.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to encode current frame.')),
+      );
+      return;
+    }
+
+    final pngBytes = byteData.buffer.asUint8List(
+      byteData.offsetInBytes,
+      byteData.lengthInBytes,
+    );
+    await File(outputPath).writeAsBytes(pngBytes, flush: true);
+
+    if (!mounted) return;
+    setState(() {
+      _statusText = 'PNG saved: $outputPath';
+    });
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('PNG saved: $outputPath')));
+  }
+
   /// Shows a dialog to pick export quality. Returns the chosen quality string,
   /// or null if the user cancelled.
   Future<String?> _showExportQualityDialog(int srcW, int srcH) async {
@@ -1841,6 +1944,13 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                         ? _saveEditedVideo
                         : null,
                     icon: const Icon(Icons.save_alt, color: Colors.white),
+                  ),
+                  IconButton(
+                    tooltip: 'Capture current scene as PNG',
+                    onPressed: (_currentFrame != null && !_isSaving)
+                        ? _saveCurrentSceneAsPng
+                        : null,
+                    icon: const Icon(Icons.photo_camera, color: Colors.white),
                   ),
                   // IconButton(
                   //   tooltip: 'Open saved folder in Explorer',
