@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:after_layout/after_layout.dart';
 import 'package:dive_computer_flutter/aPref.dart';
@@ -16,14 +17,22 @@ Future<void> main() async {
 
   if (GetPlatform.isWindows) {
     await windowManager.ensureInitialized();
-    WindowOptions windowOptions = const WindowOptions(
-      size: Size(1200, 1000),
+    final view = WidgetsBinding.instance.platformDispatcher.views.first;
+    final logicalScreenSize = view.physicalSize / view.devicePixelRatio;
+    final targetWidth = math.min(1200.0, logicalScreenSize.width * 0.92);
+    final targetHeight = math.min(1000.0, logicalScreenSize.height * 0.92);
+
+    final windowOptions = WindowOptions(
+      size: Size(targetWidth, targetHeight),
       center: true,
       // backgroundColor: Colors.white,
       skipTaskbar: false,
       titleBarStyle: TitleBarStyle.normal,
       // alwaysOnTop: true,
-      minimumSize: Size(300, 300),
+      minimumSize: Size(
+        math.min(300.0, targetWidth),
+        math.min(300.0, targetHeight),
+      ),
     );
 
     windowManager.waitUntilReadyToShow(windowOptions, () async {

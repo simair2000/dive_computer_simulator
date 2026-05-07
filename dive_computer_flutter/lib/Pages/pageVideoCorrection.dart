@@ -34,6 +34,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   String backend = "unknown";
   String? src;
   String? dst;
+  String? _lastSavedPath;
   String? _openedSrcPath;
   final vc = cv.VideoCapture.empty();
   final vw = cv.VideoWriter.empty();
@@ -61,9 +62,14 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   StreamSubscription<dynamic>? _saveIsolateSub;
   int _lastReceivedFrameNum = 0;
   int _lastReceivedPosMs = 0;
+  int? _pendingSeekTargetFrame;
+  bool _resumeAfterSeekInteraction = false;
   int _totalFrames = 0;
   bool _seekingSlider = false;
   double _saveProgress = 0;
+  cv.Mat?
+  _cachedRawPreviewFrame; // raw resized frame before corrections, for fast re-apply
+  int? _cachedRawPreviewFrameNum;
   String _statusText = 'Waiting...';
   final List<String> _playlistPaths = [];
   int _playlistIndex = -1;
@@ -369,7 +375,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       } else {
         rawFrame.dispose();
       }
-      vc.set(cv.CAP_PROP_POS_FRAMES, 0);
+      // Cache is now primed; _refreshPreviewFrame will reuse it without seek/read.
       await _refreshPreviewFrame();
     }
 
@@ -911,20 +917,21 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
 
     _processingFrame = true;
     try {
-      vc.set(cv.CAP_PROP_POS_FRAMES, 0);
+      vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
       final (ok, frame) = await vc.readAsync();
       if (!ok || frame.width == 0 || frame.height == 0) {
         frame.dispose();
         return;
       }
 
-      final preview = await _resizeForPreview(frame);
+      final rawPreview = await _resizeForPreview(frame, realtime: true);
+
       final corrected = _previewMatchMode
-          ? await _applyExportCorrections(preview, _buildCorrectionParams())
-          : await _applyCorrections(preview, realtime: true);
+          ? await _applyExportCorrections(rawPreview, _buildCorrectionParams())
+          : await _applyCorrections(rawPreview, realtime: true);
       final image = await _cvMatToImage(corrected);
-      if (!identical(preview, frame)) {
-        preview.dispose();
+      if (!identical(rawPreview, frame)) {
+        rawPreview.dispose();
       }
       frame.dispose();
       corrected.dispose();
@@ -937,7 +944,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         _isAnalysing = false;
         _statusText = 'Video ready';
       });
-      vc.set(cv.CAP_PROP_POS_FRAMES, 0);
+      vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
     } finally {
       _processingFrame = false;
     }
@@ -969,23 +976,30 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     if (!_hasVideo || _isSaving) return;
     final target = frameNum.clamp(0, math.max(0, _totalFrames - 1)).toInt();
     _seekingSlider = true;
+    _pendingSeekTargetFrame = target;
     _lastReceivedFrameNum = target;
-    // Compute actual ms position from the video rather than fps-based estimate.
-    vc.set(cv.CAP_PROP_POS_FRAMES, target.toDouble());
-    final seekPosMs = vc.get(cv.CAP_PROP_POS_MSEC).round();
+    final seekPosMs = _frameToDuration(target).inMilliseconds;
     _lastReceivedPosMs = seekPosMs;
     unawaited(_seekAudioToMs(seekPosMs));
 
     if (_isPlaying) {
-      // Kill the in-flight isolate immediately (no waiting for current frame to finish)
-      // and restart from the target position. This gives instant seek response.
-      await _killPlaybackIsolate();
       _seekingSlider = false;
+      if (_isolateSendPort != null) {
+        _isolateSendPort!.send({'cmd': 'seek', 'frame': target});
+        if (mounted) {
+          setState(() {
+            _statusText = 'Seeking...';
+          });
+        }
+        return;
+      }
+
+      // Fallback path when isolate channel is not ready.
+      await _killPlaybackIsolate();
       if (mounted) {
         setState(() {
           _isPlaying = false;
-          _isPaused =
-              true; // _playVideo will resume from _lastReceivedFrameNum = target
+          _isPaused = true;
           _statusText = 'Seeking...';
         });
       }
@@ -993,38 +1007,85 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       return;
     }
 
-    // Position was already set above for ms calculation; keep it there.
-    _seekingSlider = false;
-    if (!_processingFrame) {
-      _processingFrame = true;
-      try {
-        final (ok, frame) = await vc.readAsync();
-        if (ok && frame.width > 0) {
-          final corrected = _previewMatchMode
-              ? await _applyExportCorrections(frame, _buildCorrectionParams())
-              : await _applyCorrections(frame, realtime: true);
-          final image = await _cvMatToImage(corrected);
-          frame.dispose();
-          corrected.dispose();
-          if (mounted) {
-            setState(() => _setCurrentFrame(image));
-          } else {
-            image.dispose();
-          }
-        } else {
-          frame.dispose();
-        }
-      } finally {
-        _processingFrame = false;
-        vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
-      }
-    } else {
-      // Not processing frame: restore position that was changed for ms read.
-      vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
+    // When paused/stopped, render a lightweight seek preview to avoid UI stalls.
+    vc.set(cv.CAP_PROP_POS_FRAMES, target.toDouble());
+    if (_processingFrame) {
+      _seekingSlider = false;
+      _pendingSeekTargetFrame = null;
+      return;
     }
-    // If the isolate is alive (paused), sync it to the new position so resume
-    // continues from here instead of the old pre-seek position.
+
+    _processingFrame = true;
+    var shouldRefinePreview = false;
+    try {
+      final (ok, frame) = await vc.readAsync();
+      if (ok && frame.width > 0) {
+        final preview = await _resizeForPreview(frame, realtime: true);
+        // Show a fast raw frame first, then refine with corrections asynchronously.
+        final image = await _cvMatToImage(preview);
+        if (!identical(preview, frame)) {
+          preview.dispose();
+        }
+        frame.dispose();
+        if (mounted) {
+          setState(() => _setCurrentFrame(image));
+          shouldRefinePreview = true;
+        } else {
+          image.dispose();
+        }
+      } else {
+        frame.dispose();
+      }
+    } finally {
+      _processingFrame = false;
+      vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
+      _seekingSlider = false;
+      _pendingSeekTargetFrame = null;
+    }
+
+    if (shouldRefinePreview && !_isPlaying && mounted && !_isSaving) {
+      unawaited(_refreshPreviewFrame());
+    }
+
+    // If the isolate is alive (paused), sync it so resume continues from here.
     _isolateSendPort?.send({'cmd': 'seek', 'frame': target});
+  }
+
+  Future<void> _beginSeekInteraction() async {
+    if (!_hasVideo || _isSaving) return;
+    _seekingSlider = true;
+    _pendingSeekTargetFrame = null;
+    if (_isPlaying) {
+      _resumeAfterSeekInteraction = true;
+      await _pauseVideo();
+    } else {
+      _resumeAfterSeekInteraction = false;
+    }
+  }
+
+  Future<void> _endSeekInteraction(double value) async {
+    if (!_hasVideo || _isSaving) return;
+    final target = (_totalFrames * value).round().clamp(
+      0,
+      math.max(0, _totalFrames - 1),
+    );
+    if (_resumeAfterSeekInteraction) {
+      // Was playing before drag — skip the heavy frame render and let the
+      // fresh playback isolate show the correct frame immediately.
+      _resumeAfterSeekInteraction = false;
+      _lastReceivedFrameNum = target as int;
+      _pendingSeekTargetFrame = target;
+      final seekPosMs = _frameToDuration(target).inMilliseconds;
+      _lastReceivedPosMs = seekPosMs;
+      unawaited(_seekAudioToMs(seekPosMs));
+      _seekingSlider = false;
+      if (mounted) setState(() {});
+      if (mounted && !_isSaving) await _playVideo();
+      return;
+    }
+    // Was paused/stopped — render a lightweight preview then stay paused.
+    await _seekTo(target as int);
+    _resumeAfterSeekInteraction = false;
   }
 
   Future<void> _pauseVideo() async {
@@ -1054,6 +1115,10 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   }
 
   Future<void> _stopVideo({bool refreshPreview = false}) async {
+    // Invalidate the cached raw frame so the next _refreshPreviewFrame re-reads.
+    _cachedRawPreviewFrame?.dispose();
+    _cachedRawPreviewFrame = null;
+    _cachedRawPreviewFrameNum = null;
     final hadPlayback = _isPlaying || _isPaused;
     _playbackSession += 1;
 
@@ -1110,99 +1175,146 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       ).showSnackBar(const SnackBar(content: Text('No frame to capture.')));
       return;
     }
-
-    final sourceName = src == null ? 'scene' : p.basenameWithoutExtension(src!);
-    final frameNumber = _lastReceivedFrameNum.clamp(0, 999999999);
-    final defaultName =
-        '${sourceName}_frame_${frameNumber.toString().padLeft(6, '0')}.png';
-    final initialDirectory = src == null ? null : p.dirname(src!);
-
-    final requestedPath = await FilePicker.saveFile(
-      dialogTitle: 'Save current scene as PNG',
-      fileName: defaultName,
-      initialDirectory: initialDirectory,
-      lockParentWindow: true,
-      type: FileType.custom,
-      allowedExtensions: const ['png'],
-    );
-
-    if (requestedPath == null) {
-      if (!mounted) return;
-      setState(() {
-        _statusText = 'PNG save cancelled.';
-      });
-      return;
+    final wasPlayingBeforeCapture = _isPlaying;
+    if (wasPlayingBeforeCapture) {
+      await _pauseVideo();
     }
+    var waitDialogShown = false;
+    try {
+      final sourceName = src == null
+          ? 'scene'
+          : p.basenameWithoutExtension(src!);
+      final frameNumber = _lastReceivedFrameNum.clamp(0, 999999999);
+      final defaultName =
+          '${sourceName}_frame_${frameNumber.toString().padLeft(6, '0')}.png';
+      final initialDirectory = src == null ? null : p.dirname(src!);
 
-    final outputPath = p.extension(requestedPath).toLowerCase() == '.png'
-        ? requestedPath
-        : '$requestedPath.png';
+      final requestedPath = await FilePicker.saveFile(
+        dialogTitle: 'Save current scene as PNG',
+        fileName: defaultName,
+        initialDirectory: initialDirectory,
+        lockParentWindow: true,
+        type: FileType.custom,
+        allowedExtensions: const ['png'],
+      );
 
-    setState(() {
-      _statusText = 'Rendering original-resolution PNG...';
-    });
+      if (requestedPath == null) {
+        if (!mounted) return;
+        setState(() {
+          _statusText = 'PNG save cancelled.';
+        });
+        return;
+      }
 
-    final capture = cv.VideoCapture.fromFile(_openedSrcPath!);
-    if (!capture.isOpened) {
+      final outputPath = p.extension(requestedPath).toLowerCase() == '.png'
+          ? requestedPath
+          : '$requestedPath.png';
+
+      if (mounted) {
+        unawaited(
+          showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) {
+              return const AlertDialog(
+                content: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.4),
+                    ),
+                    SizedBox(width: 14),
+                    Text('Saving PNG...'),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+        waitDialogShown = true;
+        // Give Flutter one frame so the modal is painted before heavy native work starts.
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+      }
+
+      setState(() {
+        _statusText = 'Rendering original-resolution PNG...';
+      });
+
+      final capture = cv.VideoCapture.fromFile(_openedSrcPath!);
+      if (!capture.isOpened) {
+        capture.dispose();
+        if (!mounted) return;
+        setState(() {
+          _statusText = 'Failed to open source frame for PNG capture.';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to open source video.')),
+        );
+        return;
+      }
+
+      capture.set(cv.CAP_PROP_POS_FRAMES, frameNumber.toDouble());
+      final (ok, sourceFrame) = await capture.readAsync();
       capture.dispose();
-      if (!mounted) return;
-      setState(() {
-        _statusText = 'Failed to open source frame for PNG capture.';
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to open source video.')),
-      );
-      return;
-    }
+      if (!ok || sourceFrame.width == 0 || sourceFrame.height == 0) {
+        sourceFrame.dispose();
+        if (!mounted) return;
+        setState(() {
+          _statusText = 'Failed to read source frame for PNG capture.';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to read source frame.')),
+        );
+        return;
+      }
 
-    capture.set(cv.CAP_PROP_POS_FRAMES, frameNumber.toDouble());
-    final (ok, sourceFrame) = await capture.readAsync();
-    capture.dispose();
-    if (!ok || sourceFrame.width == 0 || sourceFrame.height == 0) {
+      final corrected = _previewMatchMode
+          ? await _applyExportCorrections(sourceFrame, _buildCorrectionParams())
+          : await _applyCorrections(sourceFrame, realtime: false);
+      final image = await _cvMatToImage(corrected);
       sourceFrame.dispose();
+      corrected.dispose();
+
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      if (byteData == null) {
+        if (!mounted) return;
+        setState(() {
+          _statusText = 'Failed to encode current frame as PNG.';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to encode current frame.')),
+        );
+        return;
+      }
+
+      final pngBytes = byteData.buffer.asUint8List(
+        byteData.offsetInBytes,
+        byteData.lengthInBytes,
+      );
+      await File(outputPath).writeAsBytes(pngBytes, flush: true);
+
       if (!mounted) return;
       setState(() {
-        _statusText = 'Failed to read source frame for PNG capture.';
+        _lastSavedPath = outputPath;
+        _statusText = 'PNG saved: $outputPath';
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to read source frame.')),
-      );
-      return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('PNG saved: $outputPath')));
+    } finally {
+      if (waitDialogShown && mounted) {
+        final nav = Navigator.of(context, rootNavigator: true);
+        if (nav.canPop()) {
+          nav.pop();
+        }
+      }
+      if (wasPlayingBeforeCapture && mounted && _hasVideo && !_isSaving) {
+        await _playVideo();
+      }
     }
-
-    final corrected = _previewMatchMode
-        ? await _applyExportCorrections(sourceFrame, _buildCorrectionParams())
-        : await _applyCorrections(sourceFrame, realtime: false);
-    final image = await _cvMatToImage(corrected);
-    sourceFrame.dispose();
-    corrected.dispose();
-
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    image.dispose();
-    if (byteData == null) {
-      if (!mounted) return;
-      setState(() {
-        _statusText = 'Failed to encode current frame as PNG.';
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to encode current frame.')),
-      );
-      return;
-    }
-
-    final pngBytes = byteData.buffer.asUint8List(
-      byteData.offsetInBytes,
-      byteData.lengthInBytes,
-    );
-    await File(outputPath).writeAsBytes(pngBytes, flush: true);
-
-    if (!mounted) return;
-    setState(() {
-      _statusText = 'PNG saved: $outputPath';
-    });
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('PNG saved: $outputPath')));
   }
 
   /// Shows a dialog to pick export quality. Returns the chosen quality string,
@@ -1474,6 +1586,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       _isSaving = false;
       _saveProgress = 1;
       dst = requestedPath;
+      _lastSavedPath = requestedPath;
       _statusText = hasAudio
           ? 'Saved with audio: $requestedPath'
           : 'Saved (video only): $requestedPath';
@@ -1481,7 +1594,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   }
 
   Future<void> _openSavedFolderInExplorer() async {
-    final savedPath = dst;
+    final savedPath = _lastSavedPath ?? dst;
     if (savedPath == null) return;
     final dir = p.dirname(savedPath);
     if (Platform.isWindows) {
@@ -1503,6 +1616,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     vc.release();
     vw.release();
     _fullscreenFocusNode.dispose();
+    _cachedRawPreviewFrame?.dispose();
+    _cachedRawPreviewFrame = null;
+    _cachedRawPreviewFrameNum = null;
     _setCurrentFrame(null);
     unawaited(
       _audioPlayer.dispose().catchError((e) {
@@ -1710,6 +1826,15 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         if (rgba == null || w == null || h == null) {
           _isolateSendPort?.send({'cmd': 'ack'});
           return;
+        }
+        if (frameNum != null && _pendingSeekTargetFrame != null) {
+          final delta = (frameNum - _pendingSeekTargetFrame!).abs();
+          if (delta > 2) {
+            _isolateSendPort?.send({'cmd': 'ack'});
+            return;
+          }
+          _pendingSeekTargetFrame = null;
+          _seekingSlider = false;
         }
         if (frameNum != null && !_seekingSlider) {
           _lastReceivedFrameNum = frameNum;
@@ -2022,19 +2147,24 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
               child: Row(
                 children: [
                   Expanded(
+                    flex: 7,
                     child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: _buildMainContent(),
                     ),
                   ),
                   if (!_isFullscreen)
-                    Container(
-                      width: 360,
-                      decoration: const BoxDecoration(
-                        color: Colors.white,
-                        border: Border(left: BorderSide(color: Colors.black12)),
+                    Expanded(
+                      flex: 3,
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          border: Border(
+                            left: BorderSide(color: Colors.black12),
+                          ),
+                        ),
+                        child: _buildControlPanel(),
                       ),
-                      child: _buildControlPanel(),
                     ),
                 ],
               ),
@@ -2130,7 +2260,8 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                         children: [
                           IconButton(
                             tooltip: 'Open saved folder in Explorer',
-                            onPressed: (dst != null && !_isSaving)
+                            onPressed:
+                                ((_lastSavedPath ?? dst) != null && !_isSaving)
                                 ? _openSavedFolderInExplorer
                                 : null,
                             icon: Icon(
@@ -2531,6 +2662,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                         ),
                         child: Slider(
                           value: progress,
+                          onChangeStart: (_hasVideo && !_isSaving)
+                              ? (_) => unawaited(_beginSeekInteraction())
+                              : null,
                           onChanged: (_hasVideo && !_isSaving)
                               ? (v) {
                                   setState(() {
@@ -2541,7 +2675,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                                 }
                               : null,
                           onChangeEnd: (_hasVideo && !_isSaving)
-                              ? (v) => _seekTo((_totalFrames * v).round())
+                              ? (v) => unawaited(_endSeekInteraction(v))
                               : null,
                         ),
                       ),
