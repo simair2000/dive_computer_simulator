@@ -18,6 +18,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:media_kit/media_kit.dart' as mk;
 import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -37,9 +38,11 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   String? dst;
   String? _lastSavedPath;
   String? _openedSrcPath;
+  String? _openedImagePath;
   final vc = cv.VideoCapture.empty();
   final vw = cv.VideoWriter.empty();
   final mk.Player _audioPlayer = mk.Player();
+  cv.Mat? _sourceImageMat;
 
   ui.Image? _currentFrame;
   bool _isPlaying = false;
@@ -50,6 +53,12 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   bool _processingFrame = false;
   int _playbackSession = 0;
   final FocusNode _fullscreenFocusNode = FocusNode();
+  final TransformationController _imageTransformController =
+      TransformationController();
+  double _imageScale = 1.0;
+
+  static const double _imageMinScale = 1.0;
+  static const double _imageMaxScale = 8.0;
 
   // Playback isolate state
   Isolate? _playbackIsolate;
@@ -185,6 +194,59 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     }
   }
 
+  void _disposeSourceImage() {
+    _sourceImageMat?.dispose();
+    _sourceImageMat = null;
+  }
+
+  void _resetImageTransform() {
+    _imageTransformController.value = Matrix4.identity();
+    _imageScale = 1.0;
+  }
+
+  double _currentImageScale() {
+    final m = _imageTransformController.value.storage;
+    return m[0];
+  }
+
+  void _handleImagePointerSignal(
+    PointerSignalEvent event,
+    BuildContext localContext,
+  ) {
+    if (!_hasImage || event is! PointerScrollEvent) return;
+
+    final deltaY = event.scrollDelta.dy;
+    if (deltaY == 0) return;
+
+    final currentScale = _currentImageScale();
+    final step = deltaY > 0 ? 0.9 : 1.1;
+    final nextScale = (currentScale * step).clamp(
+      _imageMinScale,
+      _imageMaxScale,
+    );
+    if ((nextScale - currentScale).abs() < 0.0001) return;
+
+    if (nextScale <= _imageMinScale + 0.0001) {
+      setState(_resetImageTransform);
+      return;
+    }
+
+    final scaleChange = nextScale / currentScale;
+    final renderObject = localContext.findRenderObject();
+    if (renderObject is! RenderBox) return;
+
+    final focal = renderObject.globalToLocal(event.position);
+    final nextMatrix = _imageTransformController.value.clone()
+      ..translate(focal.dx, focal.dy)
+      ..scale(scaleChange)
+      ..translate(-focal.dx, -focal.dy);
+
+    setState(() {
+      _imageTransformController.value = nextMatrix;
+      _imageScale = nextScale;
+    });
+  }
+
   Future<void> _stopAudioPlayback() async {
     try {
       await _audioPlayer.stop();
@@ -229,21 +291,25 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     );
   }
 
-  /// Deletes `_openedSrcPath` if it is a temporary copy (input_* in cache dir).
+  /// Deletes temporary input copies if they were created in cache (input_*).
   Future<void> _deleteTempInputIfNeeded() async {
-    final prev = _openedSrcPath;
-    if (prev == null) return;
-    final name = p.basename(prev);
-    if (!name.startsWith('input_')) return;
-    try {
-      final f = File(prev);
-      if (await f.exists()) {
-        await f.delete();
-        debugPrint('Deleted temp input copy: $prev');
+    final paths = <String?>[_openedSrcPath, _openedImagePath];
+    for (final prev in paths) {
+      if (prev == null) continue;
+      final name = p.basename(prev);
+      if (!name.startsWith('input_')) continue;
+      try {
+        final f = File(prev);
+        if (await f.exists()) {
+          await f.delete();
+          debugPrint('Deleted temp input copy: $prev');
+        }
+      } catch (e) {
+        debugPrint('Failed to delete temp input: $e');
       }
-    } catch (e) {
-      debugPrint('Failed to delete temp input: $e');
     }
+    _openedSrcPath = null;
+    _openedImagePath = null;
   }
 
   Future<void> _clearTemporaryCacheDirectory() async {
@@ -332,6 +398,16 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     return supported.contains(ext);
   }
 
+  bool _isSupportedImagePath(String path) {
+    final ext = p.extension(path).toLowerCase();
+    const supported = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'};
+    return supported.contains(ext);
+  }
+
+  bool _isSupportedMediaPath(String path) {
+    return _isSupportedVideoPath(path) || _isSupportedImagePath(path);
+  }
+
   Future<List<String>> _collectVideoFilesFromFolder(String folderPath) async {
     final dir = Directory(folderPath);
     if (!await dir.exists()) return [];
@@ -351,7 +427,29 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     return files;
   }
 
+  Future<List<String>> _collectMediaFilesFromFolder(String folderPath) async {
+    final dir = Directory(folderPath);
+    if (!await dir.exists()) return [];
+
+    final files = <String>[];
+    await for (final entity in dir.list(followLinks: false)) {
+      if (entity is! File) continue;
+      if (_isSupportedMediaPath(entity.path)) {
+        files.add(entity.path);
+      }
+    }
+
+    files.sort(
+      (a, b) =>
+          p.basename(a).toLowerCase().compareTo(p.basename(b).toLowerCase()),
+    );
+    return files;
+  }
+
   Future<bool> _openVideoPath(String path) async {
+    _disposeSourceImage();
+    _openedImagePath = null;
+    _resetImageTransform();
     await _stopVideo(refreshPreview: false);
     if (!mounted) return false;
 
@@ -442,10 +540,76 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     return ret;
   }
 
+  Future<bool> _openImagePath(String path) async {
+    await _stopVideo(refreshPreview: false);
+    if (!mounted) return false;
+
+    vc.release();
+    await _stopAudioPlayback();
+    await _deleteTempInputIfNeeded();
+    _disposeSourceImage();
+    _openedSrcPath = null;
+    _resetImageTransform();
+
+    setState(() {
+      src = path;
+      _setCurrentFrame(null);
+      _isPaused = false;
+      _isPlaying = false;
+      _isAnalysing = true;
+      _statusText = 'Opening image...';
+      _playlistPaths
+        ..clear()
+        ..add(path);
+      _playlistIndex = 0;
+    });
+
+    await Future.delayed(Duration.zero);
+    final preparedPath = await _prepareOpenPath(path);
+    final imageMat = await cv.imreadAsync(preparedPath);
+
+    if (!mounted) {
+      imageMat.dispose();
+      return false;
+    }
+
+    if (imageMat.isEmpty) {
+      imageMat.dispose();
+      setState(() {
+        width = -1;
+        height = -1;
+        fps = -1;
+        _totalFrames = 0;
+        _isAnalysing = false;
+        _statusText = 'Failed to open selected image';
+      });
+      return false;
+    }
+
+    _sourceImageMat = imageMat;
+    _openedImagePath = preparedPath;
+    setState(() {
+      width = imageMat.width;
+      height = imageMat.height;
+      fps = -1;
+      backend = 'image';
+      _totalFrames = 1;
+      _lastReceivedFrameNum = 0;
+      _lastReceivedPosMs = 0;
+      _isAnalysing = true;
+      _statusText = 'Analysing image...';
+    });
+
+    await _refreshPreviewFrame();
+    return true;
+  }
+
   Future<bool> _openPlaylistIndex(int index, {bool autoplay = false}) async {
     if (index < 0 || index >= _playlistPaths.length) return false;
     final path = _playlistPaths[index];
-    final opened = await _openVideoPath(path);
+    final opened = _isSupportedImagePath(path)
+        ? await _openImagePath(path)
+        : await _openVideoPath(path);
     if (!opened || !mounted) {
       return false;
     }
@@ -478,20 +642,20 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
 
   Future<void> _selectFolder() async {
     final folderPath = await FilePicker.getDirectoryPath(
-      dialogTitle: 'Select video folder',
+      dialogTitle: 'Select media folder',
       lockParentWindow: true,
     );
     if (folderPath == null) {
       return;
     }
 
-    final files = await _collectVideoFilesFromFolder(folderPath);
+    final files = await _collectMediaFilesFromFolder(folderPath);
     if (files.isEmpty) {
       if (!mounted) return;
       setState(() {
         _playlistPaths..clear();
         _playlistIndex = -1;
-        _statusText = 'No video files found in selected folder';
+        _statusText = 'No supported media files found in selected folder';
       });
       return;
     }
@@ -508,7 +672,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       if (!await _openNextPlaylistFile(autoplay: false)) {
         if (!mounted) return;
         setState(() {
-          _statusText = 'No playable video files in selected folder';
+          _statusText = 'No playable/openable files in selected folder';
         });
       }
     }
@@ -918,6 +1082,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   }
 
   bool get _hasVideo => src != null && vc.isOpened;
+  bool get _hasImage =>
+      src != null && _sourceImageMat != null && !_sourceImageMat!.isEmpty;
+  bool get _hasMedia => _hasVideo || _hasImage;
 
   Duration _frameToDuration(int frame) {
     final safeFps = fps > 1 ? fps : 30.0;
@@ -963,7 +1130,46 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   }
 
   Future<void> _refreshPreviewFrame() async {
-    if (!vc.isOpened || _isPlaying || _isSaving || _processingFrame) {
+    if (_isSaving || _processingFrame) {
+      return;
+    }
+
+    if (_hasImage) {
+      _processingFrame = true;
+      try {
+        final source = _sourceImageMat;
+        if (source == null || source.isEmpty) {
+          return;
+        }
+        final sourceCopy = cv.Mat.fromMat(source, copy: true);
+        final corrected = _previewMatchMode
+            ? await _applyExportCorrections(
+                sourceCopy,
+                _buildCorrectionParams(),
+              )
+            : await _applyCorrections(sourceCopy, realtime: false);
+        final image = await _cvMatToImage(corrected);
+        if (!identical(corrected, sourceCopy)) {
+          sourceCopy.dispose();
+        }
+        corrected.dispose();
+
+        if (!mounted) {
+          image.dispose();
+          return;
+        }
+        setState(() {
+          _setCurrentFrame(image);
+          _isAnalysing = false;
+          _statusText = 'Image ready';
+        });
+      } finally {
+        _processingFrame = false;
+      }
+      return;
+    }
+
+    if (!vc.isOpened || _isPlaying) {
       return;
     }
 
@@ -1003,7 +1209,26 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   }
 
   Future<void> _selectVideo() async {
-    final result = await FilePicker.pickFiles(type: FileType.video);
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const [
+        'mp4',
+        'mov',
+        'm4v',
+        'avi',
+        'mkv',
+        'wmv',
+        'webm',
+        'mpeg',
+        'mpg',
+        'jpg',
+        'jpeg',
+        'png',
+        'bmp',
+        'webp',
+      ],
+      lockParentWindow: true,
+    );
     if (result == null) {
       return;
     }
@@ -1044,7 +1269,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       }
 
       if (type == FileSystemEntityType.directory) {
-        final files = await _collectVideoFilesFromFolder(path);
+        final files = await _collectMediaFilesFromFolder(path);
         for (final filePath in files) {
           if (seen.add(filePath)) {
             collected.add(filePath);
@@ -1053,7 +1278,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         continue;
       }
 
-      if (type == FileSystemEntityType.file && _isSupportedVideoPath(path)) {
+      if (type == FileSystemEntityType.file && _isSupportedMediaPath(path)) {
         if (seen.add(path)) {
           collected.add(path);
         }
@@ -1063,7 +1288,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     if (collected.isEmpty) {
       if (!mounted) return;
       setState(() {
-        _statusText = 'No supported video files in dropped item(s)';
+        _statusText = 'No supported media files in dropped item(s)';
       });
       return;
     }
@@ -1074,7 +1299,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         ..clear()
         ..addAll(collected);
       _playlistIndex = 0;
-      _statusText = 'Dropped ${collected.length} video file(s)';
+      _statusText = 'Dropped ${collected.length} media file(s)';
     });
 
     if (!await _openPlaylistIndex(0)) {
@@ -1085,6 +1310,106 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         });
       }
     }
+  }
+
+  Future<void> _saveEditedImage() async {
+    if (!_hasImage || src == null || _sourceImageMat == null) {
+      setState(() {
+        _statusText = 'Select an image first.';
+      });
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _statusText = 'Preparing image export...';
+    });
+
+    final sourceName = p.basenameWithoutExtension(src!);
+    final defaultName =
+        'corrected_${sourceName}_${DateTime.now().millisecondsSinceEpoch}.png';
+    final requestedPath = await FilePicker.saveFile(
+      dialogTitle: 'Save corrected image',
+      fileName: defaultName,
+      initialDirectory: p.dirname(src!),
+      lockParentWindow: true,
+      type: FileType.custom,
+      allowedExtensions: const ['png', 'jpg', 'jpeg'],
+    );
+
+    if (requestedPath == null) {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+          _statusText = 'Image export cancelled.';
+        });
+      }
+      return;
+    }
+
+    var outputPath = requestedPath;
+    final ext = p.extension(requestedPath).toLowerCase();
+    if (ext.isEmpty) {
+      outputPath = '$requestedPath.png';
+    } else if (ext != '.png' && ext != '.jpg' && ext != '.jpeg') {
+      outputPath = '$requestedPath.png';
+    }
+
+    final safeOutputPath = await _prepareOutputPath(outputPath);
+
+    try {
+      final sourceCopy = cv.Mat.fromMat(_sourceImageMat!, copy: true);
+      final corrected = await _applyExportCorrections(
+        sourceCopy,
+        _buildCorrectionParams(),
+      );
+      if (!identical(corrected, sourceCopy)) {
+        sourceCopy.dispose();
+      }
+      final ok = await cv.imwriteAsync(safeOutputPath, corrected);
+      corrected.dispose();
+
+      if (!mounted) return;
+      if (!ok) {
+        setState(() {
+          _isSaving = false;
+          _statusText = 'Failed to save corrected image.';
+        });
+        return;
+      }
+
+      if (safeOutputPath != outputPath) {
+        await File(safeOutputPath).copy(outputPath);
+        await File(safeOutputPath).delete();
+      }
+
+      setState(() {
+        _isSaving = false;
+        _lastSavedPath = outputPath;
+        dst = outputPath;
+        _statusText = 'Image saved: $outputPath';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isSaving = false;
+        _statusText = 'Image export failed: $e';
+      });
+    }
+  }
+
+  Future<void> _saveEditedCurrentMedia() async {
+    if (_hasVideo) {
+      await _saveEditedVideo();
+      return;
+    }
+    if (_hasImage) {
+      await _saveEditedImage();
+      return;
+    }
+    setState(() {
+      _statusText = 'Select media first.';
+    });
   }
 
   Future<void> _seekTo(int frameNum) async {
@@ -1513,7 +1838,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   }
 
   Future<void> _saveEditedVideo() async {
-    if (src == null || _openedSrcPath == null) {
+    if (!_hasVideo || src == null || _openedSrcPath == null) {
       setState(() {
         _statusText = 'Select a video first.';
       });
@@ -1731,9 +2056,11 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     vc.release();
     vw.release();
     _fullscreenFocusNode.dispose();
+    _imageTransformController.dispose();
     _cachedRawPreviewFrame?.dispose();
     _cachedRawPreviewFrame = null;
     _cachedRawPreviewFrameNum = null;
+    _disposeSourceImage();
     _setCurrentFrame(null);
     unawaited(
       _audioPlayer.dispose().catchError((e) {
@@ -2179,7 +2506,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
           unawaited(_openPrevPlaylistFile(autoplay: shouldAutoplay));
           return KeyEventResult.handled;
         }
-        if (key == LogicalKeyboardKey.keyF && _hasVideo && !_isSaving) {
+        if (key == LogicalKeyboardKey.keyF && _hasMedia && !_isSaving) {
           _toggleFullscreen();
           return KeyEventResult.handled;
         }
@@ -2212,9 +2539,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                 ),
                 actions: [
                   IconButton(
-                    tooltip: 'Select video',
+                    tooltip: 'Select media',
                     onPressed: _isSaving ? null : _selectVideo,
-                    icon: const Icon(Icons.video_file, color: Colors.white),
+                    icon: const Icon(Icons.perm_media, color: Colors.white),
                   ),
                   IconButton(
                     tooltip: 'Select folder',
@@ -2222,15 +2549,16 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                     icon: const Icon(Icons.folder_open, color: Colors.white),
                   ),
                   IconButton(
-                    tooltip: 'Save corrected video',
-                    onPressed: (_hasVideo && !_isSaving)
-                        ? _saveEditedVideo
+                    tooltip: 'Save corrected media',
+                    onPressed: (_hasMedia && !_isSaving)
+                        ? _saveEditedCurrentMedia
                         : null,
                     icon: const Icon(Icons.save_alt, color: Colors.white),
                   ),
                   IconButton(
                     tooltip: 'Capture current scene as PNG',
-                    onPressed: (_currentFrame != null && !_isSaving)
+                    onPressed:
+                        (_hasVideo && _currentFrame != null && !_isSaving)
                         ? _saveCurrentSceneAsPng
                         : null,
                     icon: const Icon(Icons.photo_camera, color: Colors.white),
@@ -2349,7 +2677,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                           border: Border.all(color: colorMain, width: 2),
                         ),
                         child: Text(
-                          'Drop video file or folder to open',
+                          'Drop media file or folder to open',
                           style: TextStyle(
                             color: colorMain,
                             fontSize: 16,
@@ -2752,15 +3080,43 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
             child: _currentFrame == null
                 ? const Center(
                     child: Text(
-                      'Select a video',
+                      'Select media (video or image)',
                       style: TextStyle(color: Colors.white70, fontSize: 18),
                     ),
                   )
-                : RawImage(
-                    image: _currentFrame,
-                    fit: BoxFit.contain,
-                    filterQuality: FilterQuality.medium,
-                  ),
+                : (_hasImage
+                      ? Builder(
+                          builder: (localContext) {
+                            return Listener(
+                              onPointerSignal: (event) =>
+                                  _handleImagePointerSignal(
+                                    event,
+                                    localContext,
+                                  ),
+                              child: InteractiveViewer(
+                                transformationController:
+                                    _imageTransformController,
+                                minScale: _imageMinScale,
+                                maxScale: _imageMaxScale,
+                                scaleEnabled: false,
+                                panEnabled: _imageScale > 1.001,
+                                clipBehavior: Clip.hardEdge,
+                                child: Center(
+                                  child: RawImage(
+                                    image: _currentFrame,
+                                    fit: BoxFit.contain,
+                                    filterQuality: FilterQuality.medium,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        )
+                      : RawImage(
+                          image: _currentFrame,
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.medium,
+                        )),
           ),
           if (_isAnalysing)
             Positioned(
@@ -2798,184 +3154,187 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                 ),
               ),
             ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: AnimatedOpacity(
-              opacity: _controlsVisible ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 300),
-              child: DecoratedBox(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Colors.black87],
+          if (_hasVideo)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: AnimatedOpacity(
+                opacity: _controlsVisible ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 300),
+                child: DecoratedBox(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.transparent, Colors.black87],
+                    ),
                   ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 20, 10, 8),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SliderTheme(
-                        data: SliderTheme.of(context).copyWith(
-                          trackHeight: 2.5,
-                          activeTrackColor: Colors.white,
-                          inactiveTrackColor: Colors.white30,
-                          thumbColor: Colors.white,
-                          overlayColor: Colors.white24,
-                          thumbShape: const RoundSliderThumbShape(
-                            enabledThumbRadius: 6,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 20, 10, 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 2.5,
+                            activeTrackColor: Colors.white,
+                            inactiveTrackColor: Colors.white30,
+                            thumbColor: Colors.white,
+                            overlayColor: Colors.white24,
+                            thumbShape: const RoundSliderThumbShape(
+                              enabledThumbRadius: 6,
+                            ),
+                          ),
+                          child: Slider(
+                            value: progress,
+                            onChangeStart: (_hasVideo && !_isSaving)
+                                ? (_) => unawaited(_beginSeekInteraction())
+                                : null,
+                            onChanged: (_hasVideo && !_isSaving)
+                                ? (v) {
+                                    setState(() {
+                                      _seekingSlider = true;
+                                      _lastReceivedFrameNum = (_totalFrames * v)
+                                          .round();
+                                    });
+                                  }
+                                : null,
+                            onChangeEnd: (_hasVideo && !_isSaving)
+                                ? (v) => unawaited(_endSeekInteraction(v))
+                                : null,
                           ),
                         ),
-                        child: Slider(
-                          value: progress,
-                          onChangeStart: (_hasVideo && !_isSaving)
-                              ? (_) => unawaited(_beginSeekInteraction())
-                              : null,
-                          onChanged: (_hasVideo && !_isSaving)
-                              ? (v) {
-                                  setState(() {
-                                    _seekingSlider = true;
-                                    _lastReceivedFrameNum = (_totalFrames * v)
-                                        .round();
-                                  });
-                                }
-                              : null,
-                          onChangeEnd: (_hasVideo && !_isSaving)
-                              ? (v) => unawaited(_endSeekInteraction(v))
-                              : null,
+                        Row(
+                          children: [
+                            IconButton(
+                              tooltip: 'Previous file',
+                              onPressed: (_isSaving || !_hasPrevPlaylistFile)
+                                  ? null
+                                  : () async {
+                                      final shouldAutoplay = _isPlaying;
+                                      await _openPrevPlaylistFile(
+                                        autoplay: shouldAutoplay,
+                                      );
+                                    },
+                              icon: const Icon(
+                                Icons.skip_previous,
+                                color: Colors.white,
+                                size: 28,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: _isPlaying ? 'Pause' : 'Play',
+                              onPressed: (!_hasVideo || _isSaving)
+                                  ? null
+                                  : (_isPlaying ? _pauseVideo : _playVideo),
+                              icon: Icon(
+                                _isPlaying
+                                    ? Icons.pause_circle_filled
+                                    : Icons.play_circle_fill,
+                                color: Colors.white,
+                                size: 34,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Stop',
+                              onPressed:
+                                  (!_hasVideo ||
+                                      _isSaving ||
+                                      (!_isPlaying && !_isPaused))
+                                  ? null
+                                  : _stopVideo,
+                              icon: const Icon(
+                                Icons.stop_circle,
+                                color: Colors.white,
+                                size: 30,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Next file',
+                              onPressed: (_isSaving || !_hasNextPlaylistFile)
+                                  ? null
+                                  : () async {
+                                      final shouldAutoplay = _isPlaying;
+                                      await _openNextPlaylistFile(
+                                        autoplay: shouldAutoplay,
+                                      );
+                                    },
+                              icon: const Icon(
+                                Icons.skip_next,
+                                color: Colors.white,
+                                size: 28,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: _isFullscreen
+                                  ? 'Exit fullscreen (Esc)'
+                                  : 'Fullscreen',
+                              onPressed: _hasMedia ? _toggleFullscreen : null,
+                              icon: Icon(
+                                _isFullscreen
+                                    ? Icons.fullscreen_exit
+                                    : Icons.fullscreen,
+                                color: Colors.white,
+                                size: 28,
+                              ),
+                            ),
+                            Text(
+                              '${fmtFrameToTime(_lastReceivedFrameNum)} / ${fmtFrameToTime(_totalFrames)}',
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 12,
+                              ),
+                            ),
+                            const Spacer(),
+                            Icon(
+                              _audioVolume == 0
+                                  ? Icons.volume_off
+                                  : Icons.volume_up,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                            SizedBox(
+                              width: 92,
+                              child: SliderTheme(
+                                data: SliderTheme.of(context).copyWith(
+                                  trackHeight: 2,
+                                  activeTrackColor: Colors.white,
+                                  inactiveTrackColor: Colors.white24,
+                                  thumbColor: Colors.white,
+                                  overlayColor: Colors.white24,
+                                  thumbShape: const RoundSliderThumbShape(
+                                    enabledThumbRadius: 5,
+                                  ),
+                                  overlayShape: const RoundSliderOverlayShape(
+                                    overlayRadius: 10,
+                                  ),
+                                ),
+                                child: Slider(
+                                  value: _audioVolume,
+                                  min: 0,
+                                  max: 1,
+                                  onChanged: (_isSaving || !_hasVideo)
+                                      ? null
+                                      : (value) {
+                                          setState(() => _audioVolume = value);
+                                          unawaited(
+                                            _audioPlayer.setVolume(
+                                              value * 100.0,
+                                            ),
+                                          );
+                                        },
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                      Row(
-                        children: [
-                          IconButton(
-                            tooltip: 'Previous file',
-                            onPressed: (_isSaving || !_hasPrevPlaylistFile)
-                                ? null
-                                : () async {
-                                    final shouldAutoplay = _isPlaying;
-                                    await _openPrevPlaylistFile(
-                                      autoplay: shouldAutoplay,
-                                    );
-                                  },
-                            icon: const Icon(
-                              Icons.skip_previous,
-                              color: Colors.white,
-                              size: 28,
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: _isPlaying ? 'Pause' : 'Play',
-                            onPressed: (!_hasVideo || _isSaving)
-                                ? null
-                                : (_isPlaying ? _pauseVideo : _playVideo),
-                            icon: Icon(
-                              _isPlaying
-                                  ? Icons.pause_circle_filled
-                                  : Icons.play_circle_fill,
-                              color: Colors.white,
-                              size: 34,
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: 'Stop',
-                            onPressed:
-                                (!_hasVideo ||
-                                    _isSaving ||
-                                    (!_isPlaying && !_isPaused))
-                                ? null
-                                : _stopVideo,
-                            icon: const Icon(
-                              Icons.stop_circle,
-                              color: Colors.white,
-                              size: 30,
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: 'Next file',
-                            onPressed: (_isSaving || !_hasNextPlaylistFile)
-                                ? null
-                                : () async {
-                                    final shouldAutoplay = _isPlaying;
-                                    await _openNextPlaylistFile(
-                                      autoplay: shouldAutoplay,
-                                    );
-                                  },
-                            icon: const Icon(
-                              Icons.skip_next,
-                              color: Colors.white,
-                              size: 28,
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: _isFullscreen
-                                ? 'Exit fullscreen (Esc)'
-                                : 'Fullscreen',
-                            onPressed: _hasVideo ? _toggleFullscreen : null,
-                            icon: Icon(
-                              _isFullscreen
-                                  ? Icons.fullscreen_exit
-                                  : Icons.fullscreen,
-                              color: Colors.white,
-                              size: 28,
-                            ),
-                          ),
-                          Text(
-                            '${fmtFrameToTime(_lastReceivedFrameNum)} / ${fmtFrameToTime(_totalFrames)}',
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 12,
-                            ),
-                          ),
-                          const Spacer(),
-                          Icon(
-                            _audioVolume == 0
-                                ? Icons.volume_off
-                                : Icons.volume_up,
-                            color: Colors.white,
-                            size: 18,
-                          ),
-                          SizedBox(
-                            width: 92,
-                            child: SliderTheme(
-                              data: SliderTheme.of(context).copyWith(
-                                trackHeight: 2,
-                                activeTrackColor: Colors.white,
-                                inactiveTrackColor: Colors.white24,
-                                thumbColor: Colors.white,
-                                overlayColor: Colors.white24,
-                                thumbShape: const RoundSliderThumbShape(
-                                  enabledThumbRadius: 5,
-                                ),
-                                overlayShape: const RoundSliderOverlayShape(
-                                  overlayRadius: 10,
-                                ),
-                              ),
-                              child: Slider(
-                                value: _audioVolume,
-                                min: 0,
-                                max: 1,
-                                onChanged: (_isSaving || !_hasVideo)
-                                    ? null
-                                    : (value) {
-                                        setState(() => _audioVolume = value);
-                                        unawaited(
-                                          _audioPlayer.setVolume(value * 100.0),
-                                        );
-                                      },
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -3019,7 +3378,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
             const Text('Preview Match', style: TextStyle(fontSize: 12)),
             Switch.adaptive(
               value: _previewMatchMode,
-              onChanged: (_isSaving || !_hasVideo)
+              onChanged: (_isSaving || !_hasMedia)
                   ? null
                   : (v) {
                       setState(() {
