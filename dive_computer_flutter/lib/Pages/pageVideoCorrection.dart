@@ -9,6 +9,7 @@ import 'package:dive_computer_flutter/aPref.dart';
 import 'package:dive_computer_flutter/define.dart';
 import 'package:dive_computer_flutter/extensions.dart';
 import 'package:dive_computer_flutter/router.dart';
+import 'package:dive_computer_flutter/objectSelection.dart';
 import 'package:extended_text/extended_text.dart';
 import 'package:go_router/go_router.dart';
 import 'package:path_provider/path_provider.dart';
@@ -118,6 +119,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   Timer? _controlsHideTimer;
   DateTime? _lastFineResyncAt;
   bool _fineResyncInFlight = false;
+
+  // Object detection and selection state
+  bool _objectSelectionEnabled = false;
 
   bool get _hasPrevPlaylistFile => _playlistIndex > 0;
   bool get _hasNextPlaylistFile =>
@@ -3010,6 +3014,17 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                 },
                 onChangeEnd: (_) {},
               ),
+              const Divider(height: 16),
+              SwitchListTile(
+                value: _objectSelectionEnabled,
+                title: const Text('Object selection mode'),
+                subtitle: const Text(
+                  'Drag to select & search on Google Images',
+                ),
+                onChanged: (v) {
+                  setState(() => _objectSelectionEnabled = v);
+                },
+              ),
             ],
           ),
         ),
@@ -3058,6 +3073,123 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     );
   }
 
+  Future<void> _handleImageSelection(ImageSelectionRect selection) async {
+    if (_currentFrame == null) return;
+
+    try {
+      // Get the source image for cropping
+      cv.Mat? sourceMat;
+      if (_hasImage && _sourceImageMat != null) {
+        sourceMat = _sourceImageMat;
+      } else if (_hasVideo && vc.isOpened) {
+        // Read the current frame from video
+        vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
+        final (ok, frame) = await vc.readAsync();
+        if (!ok || frame.width == 0) {
+          frame.dispose();
+          return;
+        }
+        sourceMat = frame;
+      } else {
+        return;
+      }
+
+      final source = sourceMat;
+      if (source == null) return;
+
+      // 정규화된 좌표(0~1)를 원본 이미지 좌표로 변환
+      final rect = selection.rect;
+      final imageWidth = source.width.toDouble();
+      final imageHeight = source.height.toDouble();
+
+      final adjustedSelection = ImageSelectionRect(
+        start: Offset(rect.left * imageWidth, rect.top * imageHeight),
+        end: Offset(rect.right * imageWidth, rect.bottom * imageHeight),
+      );
+
+      // Crop the selected region
+      final croppedMat = await cropSelectedRegion(
+        sourceImage: source,
+        selection: adjustedSelection,
+        displaySize: Size(imageWidth, imageHeight),
+      );
+
+      if (croppedMat == null || croppedMat.isEmpty) {
+        if (!_hasVideo) sourceMat?.dispose();
+        return;
+      }
+
+      // Convert Mat to PNG file
+      final imagePath = await matToPngFile(
+        croppedMat,
+        maxLongEdge: _hasImage ? 720 : 0,
+      );
+      croppedMat.dispose();
+
+      if (imagePath != null) {
+        if (!mounted) return;
+
+        // Copy image to Windows clipboard (actual image format)
+        final clipboardSuccess = await copyImageFileToWindowsClipboard(
+          imagePath,
+        );
+
+        if (clipboardSuccess) {
+          // Open Google Images search with automatic image upload
+          await searchImageOnGoogle(imagePath);
+
+          // Show feedback
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Image uploaded to Google Images! Check browser...',
+              ),
+              duration: Duration(seconds: 2),
+            ),
+          );
+
+          // Open file explorer to show the saved image location
+          // 약간의 지연을 주어 이미 열려있는 창에 포커스
+          await Future.delayed(const Duration(milliseconds: 500));
+          if (Platform.isWindows && mounted) {
+            try {
+              await Process.run('explorer.exe', ['/select,$imagePath']);
+            } catch (e) {
+              debugPrint('Failed to open explorer: $e');
+            }
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Clipboard copy failed. Opening Google Images...'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+
+          // Try to open Google Images anyway and upload
+          await searchImageOnGoogle(imagePath);
+
+          // Open file explorer as fallback with delay
+          await Future.delayed(const Duration(milliseconds: 500));
+          if (Platform.isWindows && mounted) {
+            try {
+              await Process.run('explorer.exe', ['/select,$imagePath']);
+            } catch (e) {
+              debugPrint('Failed to open explorer: $e');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Image selection error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    }
+  }
+
   Widget _buildVideoSurface() {
     String fmtFrameToTime(int frames) {
       final seconds = (fps > 0 ? frames / fps : 0.0).round();
@@ -3070,7 +3202,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         ? (_lastReceivedFrameNum / _totalFrames).clamp(0.0, 1.0)
         : 0.0;
 
-    return MouseRegion(
+    final videoDisplay = MouseRegion(
       onHover: (_) => _showControlsTemporarily(),
       child: Stack(
         fit: StackFit.expand,
@@ -3338,6 +3470,18 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         ],
       ),
     );
+
+    // Wrap with SelectableImageDisplay if selection mode is enabled
+    if (_objectSelectionEnabled && _hasMedia) {
+      return SelectableImageDisplay(
+        baseWidget: videoDisplay,
+        onSelectionComplete: (selection) async {
+          await _handleImageSelection(selection);
+        },
+      );
+    }
+
+    return videoDisplay;
   }
 
   Widget _previewContainer({required Widget child}) {
