@@ -14,6 +14,7 @@ import 'package:go_router/go_router.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:dartcv4/dartcv.dart' as cv;
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:media_kit/media_kit.dart' as mk;
 import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
@@ -75,6 +76,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   int _playlistIndex = -1;
 
   bool _isAnalysing = false;
+  bool _isDragOver = false;
+  String? _ffmpegExeForOpen;
+  bool _ffmpegCheckingForOpen = false;
 
   void _setCurrentFrame(ui.Image? image) {
     final previous = _currentFrame;
@@ -259,12 +263,44 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     }
   }
 
+  Future<bool> _ensureFfmpegForOpen() async {
+    if (!Platform.isWindows) {
+      return false;
+    }
+    if (_ffmpegExeForOpen != null) {
+      return true;
+    }
+    if (_ffmpegCheckingForOpen) {
+      return false;
+    }
+
+    _ffmpegCheckingForOpen = true;
+    try {
+      final exe = await _quickFindFfmpeg();
+      if (exe != null) {
+        _ffmpegExeForOpen = exe;
+        debugPrint('[ffmpeg] Ready for video open: $exe');
+        return true;
+      }
+
+      debugPrint(
+        '[ffmpeg] Not available for video open. Falling back to non-ffmpeg backends.',
+      );
+      return false;
+    } finally {
+      _ffmpegCheckingForOpen = false;
+    }
+  }
+
   Future<bool> _openVideoCapture(String path) async {
     await _deleteTempInputIfNeeded();
     vc.release();
 
     final preparedPath = await _prepareOpenPath(path);
-    final apiPreferences = <int>[cv.CAP_ANY, cv.CAP_FFMPEG, cv.CAP_MSMF];
+    final hasFfmpeg = await _ensureFfmpegForOpen();
+    final apiPreferences = hasFfmpeg
+        ? <int>[cv.CAP_FFMPEG, cv.CAP_MSMF, cv.CAP_ANY]
+        : <int>[cv.CAP_MSMF, cv.CAP_ANY, cv.CAP_FFMPEG];
 
     for (final api in apiPreferences) {
       final opened = vc.open(preparedPath, apiPreference: api);
@@ -331,6 +367,22 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     });
     // Yield so the UI renders the loading state before we block.
     await Future.delayed(Duration.zero);
+
+    if (Platform.isWindows && _ffmpegExeForOpen == null) {
+      if (mounted) {
+        setState(() {
+          _statusText = 'Checking ffmpeg...';
+        });
+      }
+      await Future.delayed(Duration.zero);
+      await _ensureFfmpegForOpen();
+      if (!mounted) {
+        return false;
+      }
+      setState(() {
+        _statusText = 'Opening video...';
+      });
+    }
 
     final ret = await _openVideoCapture(path);
     if (!mounted) {
@@ -970,6 +1022,69 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       _playlistIndex = 0;
     });
     await _openPlaylistIndex(0);
+  }
+
+  Future<void> _handleDroppedPaths(List<String> droppedPaths) async {
+    if (droppedPaths.isEmpty) {
+      return;
+    }
+
+    final collected = <String>[];
+    final seen = <String>{};
+
+    for (final raw in droppedPaths) {
+      final path = raw.trim();
+      if (path.isEmpty) continue;
+
+      FileSystemEntityType type;
+      try {
+        type = await FileSystemEntity.type(path, followLinks: true);
+      } catch (_) {
+        continue;
+      }
+
+      if (type == FileSystemEntityType.directory) {
+        final files = await _collectVideoFilesFromFolder(path);
+        for (final filePath in files) {
+          if (seen.add(filePath)) {
+            collected.add(filePath);
+          }
+        }
+        continue;
+      }
+
+      if (type == FileSystemEntityType.file && _isSupportedVideoPath(path)) {
+        if (seen.add(path)) {
+          collected.add(path);
+        }
+      }
+    }
+
+    if (collected.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _statusText = 'No supported video files in dropped item(s)';
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _playlistPaths
+        ..clear()
+        ..addAll(collected);
+      _playlistIndex = 0;
+      _statusText = 'Dropped ${collected.length} video file(s)';
+    });
+
+    if (!await _openPlaylistIndex(0)) {
+      if (!await _openNextPlaylistFile(autoplay: false)) {
+        if (!mounted) return;
+        setState(() {
+          _statusText = 'Dropped files found, but none were playable';
+        });
+      }
+    }
   }
 
   Future<void> _seekTo(int frameNum) async {
@@ -2141,58 +2256,112 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                 ],
                 backgroundColor: colorMain,
               ),
-        body: Stack(
-          children: [
-            SafeArea(
-              child: Row(
-                children: [
-                  Expanded(
-                    flex: 7,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: _buildMainContent(),
-                    ),
-                  ),
-                  if (!_isFullscreen)
+        body: DropTarget(
+          onDragEntered: (_) {
+            if (!mounted) return;
+            setState(() {
+              _isDragOver = true;
+            });
+          },
+          onDragExited: (_) {
+            if (!mounted) return;
+            setState(() {
+              _isDragOver = false;
+            });
+          },
+          onDragDone: (details) async {
+            if (mounted) {
+              setState(() {
+                _isDragOver = false;
+              });
+            }
+            final droppedPaths = details.files
+                .map((item) => item.path)
+                .where((path) => path.isNotEmpty)
+                .toList();
+            await _handleDroppedPaths(droppedPaths);
+          },
+          child: Stack(
+            children: [
+              SafeArea(
+                child: Row(
+                  children: [
                     Expanded(
-                      flex: 3,
-                      child: Container(
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          border: Border(
-                            left: BorderSide(color: Colors.black12),
-                          ),
-                        ),
-                        child: _buildControlPanel(),
+                      flex: 7,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: _buildMainContent(),
                       ),
                     ),
-                ],
-              ),
-            ),
-            if (_isFullscreen)
-              Positioned.fill(
-                child: ColoredBox(
-                  color: Colors.black,
-                  child: Stack(
-                    children: [
-                      Center(child: _buildVideoSurface()),
-                      Positioned(
-                        top: 12,
-                        right: 12,
-                        child: IconButton(
-                          tooltip: 'Exit fullscreen (Esc)',
-                          onPressed: _exitFullscreen,
-                          icon: const Icon(
-                            Icons.fullscreen_exit,
+                    if (!_isFullscreen)
+                      Expanded(
+                        flex: 3,
+                        child: Container(
+                          decoration: const BoxDecoration(
                             color: Colors.white,
+                            border: Border(
+                              left: BorderSide(color: Colors.black12),
+                            ),
                           ),
+                          child: _buildControlPanel(),
                         ),
                       ),
-                    ],
-                  ),
+                  ],
                 ),
               ),
-          ],
+              if (_isFullscreen)
+                Positioned.fill(
+                  child: ColoredBox(
+                    color: Colors.black,
+                    child: Stack(
+                      children: [
+                        Center(child: _buildVideoSurface()),
+                        Positioned(
+                          top: 12,
+                          right: 12,
+                          child: IconButton(
+                            tooltip: 'Exit fullscreen (Esc)',
+                            onPressed: _exitFullscreen,
+                            icon: const Icon(
+                              Icons.fullscreen_exit,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (_isDragOver)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Container(
+                      alignment: Alignment.center,
+                      color: Colors.black.withValues(alpha: 0.35),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 14,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: colorMain, width: 2),
+                        ),
+                        child: Text(
+                          'Drop video file or folder to open',
+                          style: TextStyle(
+                            color: colorMain,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
