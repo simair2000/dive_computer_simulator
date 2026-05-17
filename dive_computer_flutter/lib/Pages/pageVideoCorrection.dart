@@ -1906,9 +1906,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     int outW = srcH > 0 ? ((srcW * outH / srcH).round() ~/ 2) * 2 : srcW;
     outH = (outH ~/ 2) * 2;
 
+    final sourceName = p.basenameWithoutExtension(src!);
     final cacheDir = await getApplicationCacheDirectory();
-    final defaultName =
-        'corrected_${DateTime.now().millisecondsSinceEpoch}.mp4';
+    final defaultName = 'corrected_$sourceName.mp4';
     final requestedPath = await FilePicker.saveFile(
       dialogTitle: 'Save corrected video',
       fileName: defaultName,
