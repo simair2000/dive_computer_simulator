@@ -110,14 +110,21 @@ class _PageSplashState extends State<PageSplash> with AfterLayoutMixin {
                           ],
                         ),
                         onPressed: () {
-                          GetPlatform.isWindows
-                              ? context.goNamed(RoutePage.video_correction.name)
-                              : Get.snackbar(
-                                  'Unsupported Platform',
-                                  'Video correction is only available on Windows.',
-                                  backgroundColor: Colors.red,
-                                  colorText: Colors.white,
-                                );
+                          if (GetPlatform.isWindows) {
+                            context.goNamed(RoutePage.video_correction.name);
+                          } else if (GetPlatform.isAndroid ||
+                              GetPlatform.isIOS) {
+                            context.goNamed(
+                              RoutePage.video_correction_mobile.name,
+                            );
+                          } else {
+                            Get.snackbar(
+                              'Unsupported Platform',
+                              'Video correction is only available on Windows, Android, and iOS.',
+                              backgroundColor: Colors.red,
+                              colorText: Colors.white,
+                            );
+                          }
                         },
                       ),
                     ],

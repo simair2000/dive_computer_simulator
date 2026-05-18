@@ -30,9 +30,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   get: ^4.7.3
   after_layout: ^1.2.0
@@ -41,20 +38,25 @@ dependencies:
   hive_ce: ^2.19.3
   intl: ^0.20.2
   jiffy: ^6.4.4
-  window_manager: ^0.5.1
   package_info_plus: ^9.0.0
   path_provider: ^2.1.5
   fl_chart: ^1.2.0
-  opencv_dart: ^2.2.1+4
   extended_text: ^15.0.2
   file_picker: ^11.0.2
+  path: ^1.9.1
+  url_launcher: ^6.3.0
+  http: ^1.1.0
+  image_picker: ^1.0.7
+  video_player: ^2.8.2
+  image: ^4.1.7
+  flutter_image_compress: ^2.2.0
+  ffmpeg_kit_flutter_new: ^4.1.0
+  window_manager: ^0.5.1
+  opencv_dart: ^2.2.1+4
   dartcv4: ^2.2.1+4
   desktop_drop: ^0.6.0
   media_kit: ^1.2.6
   media_kit_libs_windows_video: ^1.0.11
-  path: ^1.9.1
-  url_launcher: ^6.3.0
-  http: ^1.1.0
 
 dev_dependencies:
   flutter_test:
