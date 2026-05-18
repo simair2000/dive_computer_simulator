@@ -89,6 +89,8 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   bool _isDragOver = false;
   String? _ffmpegExeForOpen;
   bool _ffmpegCheckingForOpen = false;
+  bool _vcppCheckedForOpen = false;
+  bool _vcppCheckingForOpen = false;
 
   void _setCurrentFrame(ui.Image? image) {
     final previous = _currentFrame;
@@ -362,6 +364,148 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     }
   }
 
+  Future<void> _ensureVcppRuntimeForOpen() async {
+    if (!Platform.isWindows || _vcppCheckedForOpen || _vcppCheckingForOpen) {
+      return;
+    }
+
+    _vcppCheckingForOpen = true;
+    try {
+      final hasRuntime = await _isVcppRuntimeInstalled();
+      if (hasRuntime) {
+        debugPrint('[vcpp] VC++ runtime already installed.');
+        return;
+      }
+
+      debugPrint('[vcpp] VC++ runtime not found. Attempting auto-install...');
+      final installed = await _installLatestVcppRuntime();
+      if (!installed) {
+        debugPrint('[vcpp] Auto-install did not complete.');
+        return;
+      }
+
+      final verified = await _isVcppRuntimeInstalled();
+      if (verified) {
+        debugPrint('[vcpp] VC++ runtime installation verified.');
+      } else {
+        debugPrint('[vcpp] Installer ran but runtime could not be verified.');
+      }
+    } finally {
+      _vcppCheckingForOpen = false;
+      _vcppCheckedForOpen = true;
+    }
+  }
+
+  Future<bool> _isVcppRuntimeInstalled() async {
+    if (!Platform.isWindows) {
+      return true;
+    }
+
+    const runtimeRegPath =
+        r'HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64';
+    try {
+      final query = await Process.run('reg', [
+        'query',
+        runtimeRegPath,
+        '/v',
+        'Installed',
+      ], runInShell: true);
+
+      if (query.exitCode != 0) {
+        return false;
+      }
+
+      final out = '${query.stdout}';
+      final installed = RegExp(
+        r'Installed\s+REG_DWORD\s+0x1',
+        caseSensitive: false,
+      ).hasMatch(out);
+      return installed;
+    } catch (e) {
+      debugPrint('[vcpp] Registry check failed: $e');
+      return false;
+    }
+  }
+
+  Future<bool> _installLatestVcppRuntime() async {
+    if (!Platform.isWindows) {
+      return false;
+    }
+
+    const vcRedistUrl = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
+
+    try {
+      final supportDir = await getApplicationSupportDirectory();
+      final installerDir = Directory(
+        p.join(supportDir.path, 'vcpp_runtime_installer'),
+      );
+      await installerDir.create(recursive: true);
+
+      final installerPath = p.join(installerDir.path, 'vc_redist.x64.exe');
+
+      String psQuote(String value) => value.replaceAll("'", "''");
+
+      final downloadScript =
+          "\$ErrorActionPreference='Stop'; "
+          "\$ProgressPreference='SilentlyContinue'; "
+          "Invoke-WebRequest -Uri '${psQuote(vcRedistUrl)}' -OutFile '${psQuote(installerPath)}';";
+
+      final download = await Process.run('powershell', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        downloadScript,
+      ], runInShell: true);
+
+      if (download.exitCode != 0 || !File(installerPath).existsSync()) {
+        debugPrint('[vcpp] Download failed: ${download.stderr}');
+        return false;
+      }
+
+      final silentInstall = await Process.run(installerPath, [
+        '/install',
+        '/quiet',
+        '/norestart',
+      ], runInShell: true);
+
+      // 0: success, 1638: newer/already installed, 3010: restart required.
+      if (silentInstall.exitCode == 0 ||
+          silentInstall.exitCode == 1638 ||
+          silentInstall.exitCode == 3010) {
+        return true;
+      }
+
+      // Fallback to elevated interactive install when silent install is blocked.
+      final elevateScript =
+          "\$p = Start-Process -FilePath '${psQuote(installerPath)}' "
+          "-ArgumentList '/install','/norestart' -Verb RunAs -Wait -PassThru; "
+          "exit \$p.ExitCode;";
+
+      final elevatedInstall = await Process.run('powershell', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        elevateScript,
+      ], runInShell: true);
+
+      if (elevatedInstall.exitCode == 0 ||
+          elevatedInstall.exitCode == 1638 ||
+          elevatedInstall.exitCode == 3010) {
+        return true;
+      }
+
+      debugPrint(
+        '[vcpp] Install failed. silent=${silentInstall.exitCode}, elevated=${elevatedInstall.exitCode}',
+      );
+      return false;
+    } catch (e) {
+      debugPrint('[vcpp] Install exception: $e');
+      return false;
+    }
+  }
+
   Future<bool> _openVideoCapture(String path) async {
     await _deleteTempInputIfNeeded();
     vc.release();
@@ -469,6 +613,22 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     });
     // Yield so the UI renders the loading state before we block.
     await Future.delayed(Duration.zero);
+
+    if (Platform.isWindows && !_vcppCheckedForOpen) {
+      if (mounted) {
+        setState(() {
+          _statusText = 'Checking VC++ runtime...';
+        });
+      }
+      await Future.delayed(Duration.zero);
+      await _ensureVcppRuntimeForOpen();
+      if (!mounted) {
+        return false;
+      }
+      setState(() {
+        _statusText = 'Opening video...';
+      });
+    }
 
     if (Platform.isWindows && _ffmpegExeForOpen == null) {
       if (mounted) {
