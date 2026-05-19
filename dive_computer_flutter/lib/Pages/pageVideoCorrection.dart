@@ -23,6 +23,8 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
+enum _ToastType { success, info, warning, error }
+
 class PageVideoCorrection extends StatefulWidget {
   const PageVideoCorrection({super.key});
 
@@ -60,7 +62,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
 
   static const double _imageMinScale = 1.0;
   static const double _imageMaxScale = 8.0;
-
   // Playback isolate state
   Isolate? _playbackIsolate;
   SendPort? _isolateSendPort;
@@ -91,6 +92,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   bool _ffmpegCheckingForOpen = false;
   bool _vcppCheckedForOpen = false;
   bool _vcppCheckingForOpen = false;
+  String? _transcodedTempPath; // ffmpeg 트랜스코딩 임시 파일
 
   void _setCurrentFrame(ui.Image? image) {
     final previous = _currentFrame;
@@ -121,6 +123,11 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   Timer? _controlsHideTimer;
   DateTime? _lastFineResyncAt;
   bool _fineResyncInFlight = false;
+  OverlayEntry? _toastOverlayEntry;
+  Timer? _toastTimer;
+  final TextEditingController _presetNameController = TextEditingController();
+  final Map<String, Map<String, dynamic>> _savedCorrectionPresets = {};
+  String? _selectedPresetName;
 
   // Object detection and selection state
   bool _objectSelectionEnabled = false;
@@ -150,6 +157,481 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     );
     _previewMatchMode = APref.getData(AprefKey.VC_PREVIEW_MATCH_MODE);
     _audioVolume = APref.getData(AprefKey.VC_AUDIO_VOLUME);
+    _loadNamedCorrectionPresets();
+  }
+
+  void _loadNamedCorrectionPresets() {
+    final dynamic raw = APref.getData(
+      AprefKey.VC_CORRECTION_PRESETS,
+      defaultValue: const <String, dynamic>{},
+    );
+    _savedCorrectionPresets.clear();
+
+    if (raw is Map) {
+      for (final entry in raw.entries) {
+        final key = entry.key.toString().trim();
+        final value = entry.value;
+        if (key.isEmpty || value is! Map) continue;
+        _savedCorrectionPresets[key] = Map<String, dynamic>.from(value);
+      }
+    }
+
+    final dynamic lastPresetRaw = APref.getData(
+      AprefKey.VC_LAST_PRESET_NAME,
+      defaultValue: '',
+    );
+    final lastPreset = lastPresetRaw?.toString().trim() ?? '';
+    if (lastPreset.isNotEmpty &&
+        _savedCorrectionPresets.containsKey(lastPreset)) {
+      _selectedPresetName = lastPreset;
+      _presetNameController.text = lastPreset;
+      return;
+    }
+
+    if (_savedCorrectionPresets.isNotEmpty) {
+      final sortedNames = _savedCorrectionPresets.keys.toList()..sort();
+      _selectedPresetName = sortedNames.first;
+      _presetNameController.text = _selectedPresetName!;
+    }
+  }
+
+  Map<String, dynamic> _currentCorrectionSettingsSnapshot() {
+    return <String, dynamic>{
+      'autoCorrection': _autoCorrection,
+      'autoStrength': _autoStrength,
+      'contrast': _contrast,
+      'brightness': _brightness,
+      'saturation': _saturation,
+      'temperature': _temperature,
+      'redRecovery': _redRecovery,
+      'greenWaterAutoCorrection': _greenWaterAutoCorrection,
+      'greenWaterStrength': _greenWaterStrength,
+      'localMaskEnabled': _localMaskEnabled,
+      'localMaskStrength': _localMaskStrength,
+      'blueOceanTone': _blueOceanTone,
+      'particleReduction': _particleReduction,
+      'particleReductionStrength': _particleReductionStrength,
+      'previewMatchMode': _previewMatchMode,
+      'audioVolume': _audioVolume,
+    };
+  }
+
+  bool _asBool(dynamic value, bool fallback) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    return fallback;
+  }
+
+  double _asDouble(dynamic value, double fallback) {
+    if (value is num) return value.toDouble();
+    return fallback;
+  }
+
+  void _applyCorrectionSettingsMap(Map<String, dynamic> settings) {
+    _autoCorrection = _asBool(settings['autoCorrection'], _autoCorrection);
+    _autoStrength = _asDouble(settings['autoStrength'], _autoStrength);
+    _contrast = _asDouble(settings['contrast'], _contrast);
+    _brightness = _asDouble(settings['brightness'], _brightness);
+    _saturation = _asDouble(settings['saturation'], _saturation);
+    _temperature = _asDouble(settings['temperature'], _temperature);
+    _redRecovery = _asDouble(settings['redRecovery'], _redRecovery);
+    _greenWaterAutoCorrection = _asBool(
+      settings['greenWaterAutoCorrection'],
+      _greenWaterAutoCorrection,
+    );
+    _greenWaterStrength = _asDouble(
+      settings['greenWaterStrength'],
+      _greenWaterStrength,
+    );
+    _localMaskEnabled = _asBool(
+      settings['localMaskEnabled'],
+      _localMaskEnabled,
+    );
+    _localMaskStrength = _asDouble(
+      settings['localMaskStrength'],
+      _localMaskStrength,
+    );
+    _blueOceanTone = _asDouble(settings['blueOceanTone'], _blueOceanTone);
+    _particleReduction = _asBool(
+      settings['particleReduction'],
+      _particleReduction,
+    );
+    _particleReductionStrength = _asDouble(
+      settings['particleReductionStrength'],
+      _particleReductionStrength,
+    );
+    _previewMatchMode = _asBool(
+      settings['previewMatchMode'],
+      _previewMatchMode,
+    );
+    _audioVolume = _asDouble(
+      settings['audioVolume'],
+      _audioVolume,
+    ).clamp(0.0, 1.0);
+  }
+
+  Future<void> _saveNamedCorrectionPreset(String rawName) async {
+    final name = rawName.trim();
+    if (name.isEmpty) {
+      if (!mounted) return;
+      _showCenterToast('Please enter a preset name.', type: _ToastType.warning);
+      return;
+    }
+
+    _savedCorrectionPresets[name] = _currentCorrectionSettingsSnapshot();
+    _selectedPresetName = name;
+    _presetNameController.text = name;
+
+    await APref.setData(
+      AprefKey.VC_CORRECTION_PRESETS,
+      _savedCorrectionPresets,
+    );
+    await APref.setData(AprefKey.VC_LAST_PRESET_NAME, name);
+    await _saveSettings(showFeedback: false);
+
+    if (!mounted) return;
+    setState(() {});
+    _showCenterToast('Preset saved: $name', type: _ToastType.success);
+  }
+
+  Future<void> _loadNamedCorrectionPreset(String name) async {
+    final preset = _savedCorrectionPresets[name];
+    if (preset == null) {
+      if (!mounted) return;
+      _showCenterToast('Preset not found.', type: _ToastType.warning);
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _selectedPresetName = name;
+      _presetNameController.text = name;
+      _applyCorrectionSettingsMap(preset);
+    });
+
+    _pushRealtimeParamsToIsolate();
+    if (_audioEnabled) {
+      unawaited(_audioPlayer.setVolume(_audioVolume * 100.0));
+    }
+    await APref.setData(AprefKey.VC_LAST_PRESET_NAME, name);
+    await _refreshPreviewFrame();
+
+    if (!mounted) return;
+    _showCenterToast('Preset loaded: $name', type: _ToastType.info);
+  }
+
+  void _showCenterToast(
+    String message, {
+    Duration duration = const Duration(seconds: 2),
+    _ToastType type = _ToastType.info,
+  }) {
+    if (!mounted) return;
+
+    _toastTimer?.cancel();
+    _toastOverlayEntry?.remove();
+    _toastOverlayEntry = null;
+
+    final overlay = Overlay.maybeOf(context, rootOverlay: true);
+    if (overlay == null) return;
+
+    final entry = OverlayEntry(
+      builder: (context) {
+        final screenSize = MediaQuery.sizeOf(context);
+        final toastMaxWidth = math.min(430.0, screenSize.width - 32);
+
+        Color backgroundColor;
+        Color borderColor;
+        Color iconColor;
+        IconData iconData;
+
+        switch (type) {
+          case _ToastType.success:
+            backgroundColor = const Color(0xFF0F2A1F).withValues(alpha: 0.93);
+            borderColor = const Color(0xFF4CC38A);
+            iconColor = const Color(0xFF6FF2B4);
+            iconData = Icons.check_circle_rounded;
+            break;
+          case _ToastType.warning:
+            backgroundColor = const Color(0xFF2B220C).withValues(alpha: 0.93);
+            borderColor = const Color(0xFFFFC857);
+            iconColor = const Color(0xFFFFD57A);
+            iconData = Icons.warning_amber_rounded;
+            break;
+          case _ToastType.error:
+            backgroundColor = const Color(0xFF351619).withValues(alpha: 0.94);
+            borderColor = const Color(0xFFFF7A86);
+            iconColor = const Color(0xFFFF9BA4);
+            iconData = Icons.error_rounded;
+            break;
+          case _ToastType.info:
+            backgroundColor = const Color(0xFF0D1A2A).withValues(alpha: 0.92);
+            borderColor = const Color(0xFF6CA6FF);
+            iconColor = const Color(0xFF8EBBFF);
+            iconData = Icons.info_rounded;
+            break;
+        }
+
+        return IgnorePointer(
+          ignoring: true,
+          child: SafeArea(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    constraints: BoxConstraints(maxWidth: toastMaxWidth),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 11,
+                    ),
+                    decoration: BoxDecoration(
+                      color: backgroundColor,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: borderColor.withValues(alpha: 0.95),
+                        width: 1.2,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.45),
+                          blurRadius: 18,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(iconData, color: iconColor, size: 18),
+                        const SizedBox(width: 10),
+                        Flexible(
+                          child: Text(
+                            message,
+                            textAlign: TextAlign.left,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              height: 1.25,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    overlay.insert(entry);
+    _toastOverlayEntry = entry;
+    _toastTimer = Timer(duration, () {
+      if (identical(_toastOverlayEntry, entry)) {
+        _toastOverlayEntry = null;
+      }
+      entry.remove();
+    });
+  }
+
+  void _applyDefaultCorrectionSettings() {
+    _previewMatchMode = true;
+    _autoCorrection = true;
+    _autoStrength = 0.62;
+    _contrast = 1.2;
+    _brightness = 6;
+    _saturation = 1.12;
+    _temperature = 10;
+    _redRecovery = 1.05;
+    _greenWaterAutoCorrection = false;
+    _greenWaterStrength = 0.55;
+    _localMaskEnabled = false;
+    _localMaskStrength = 0.55;
+    _blueOceanTone = 1.12;
+    _particleReduction = false;
+    _particleReductionStrength = 0.55;
+  }
+
+  Future<void> _showSavePresetDialog() async {
+    final nameController = TextEditingController(
+      text: _selectedPresetName ?? 'Default',
+    );
+    try {
+      final enteredName = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('Save preset'),
+            content: TextField(
+              controller: nameController,
+              autofocus: true,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (value) {
+                Navigator.of(dialogContext).pop(value);
+              },
+              decoration: const InputDecoration(
+                labelText: 'Preset name',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () =>
+                    Navigator.of(dialogContext).pop(nameController.text),
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (!mounted || enteredName == null) return;
+      await _saveNamedCorrectionPreset(enteredName);
+    } finally {
+      nameController.dispose();
+    }
+  }
+
+  Future<void> _showLoadPresetDialog() async {
+    if (_savedCorrectionPresets.isEmpty) {
+      if (!mounted) return;
+      _showCenterToast('No saved presets.', type: _ToastType.warning);
+      return;
+    }
+
+    final names = _savedCorrectionPresets.keys.toList()..sort();
+    final selectedName = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Load preset'),
+          content: SizedBox(
+            width: 360,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: names.length,
+              itemBuilder: (context, index) {
+                final name = names[index];
+                return ListTile(
+                  dense: true,
+                  title: Text(name),
+                  selected: name == _selectedPresetName,
+                  onTap: () => Navigator.of(dialogContext).pop(name),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || selectedName == null) return;
+    await _loadNamedCorrectionPreset(selectedName);
+  }
+
+  Future<void> _confirmDeleteCurrentPreset() async {
+    if (_savedCorrectionPresets.isEmpty) return;
+    final targetName = _selectedPresetName;
+    if (targetName == null ||
+        !_savedCorrectionPresets.containsKey(targetName)) {
+      if (!mounted) return;
+      _showCenterToast('No current preset selected.', type: _ToastType.warning);
+      return;
+    }
+
+    final confirmDelete = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete preset'),
+          content: Text('Delete current preset "$targetName"?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || confirmDelete != true) return;
+
+    _savedCorrectionPresets.remove(targetName);
+    if (_savedCorrectionPresets.isEmpty) {
+      _selectedPresetName = null;
+      _presetNameController.clear();
+      await APref.setData(AprefKey.VC_LAST_PRESET_NAME, '');
+    } else {
+      final names = _savedCorrectionPresets.keys.toList()..sort();
+      _selectedPresetName = names.first;
+      _presetNameController.text = _selectedPresetName!;
+      await APref.setData(AprefKey.VC_LAST_PRESET_NAME, _selectedPresetName!);
+    }
+
+    await APref.setData(
+      AprefKey.VC_CORRECTION_PRESETS,
+      _savedCorrectionPresets,
+    );
+
+    if (!mounted) return;
+    setState(() {});
+    _showCenterToast('Preset deleted: $targetName', type: _ToastType.info);
+  }
+
+  Future<void> _confirmResetToDefault() async {
+    final confirmReset = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Reset settings'),
+          content: const Text('Reset correction settings to default values?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              // onPressed: () => Navigator.of(dialogContext).pop(true),
+              onPressed: () {
+                _selectedPresetName = 'Default';
+                _presetNameController.text = _selectedPresetName!;
+                Navigator.of(dialogContext).pop(true);
+              },
+              child: const Text('Reset'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || confirmReset != true) return;
+
+    setState(() {
+      _applyDefaultCorrectionSettings();
+    });
+    _pushRealtimeParamsToIsolate();
+    await _refreshPreviewFrame();
+    if (!mounted) return;
+    _showCenterToast('Reset to default settings.', type: _ToastType.info);
   }
 
   @override
@@ -313,6 +795,19 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       } catch (e) {
         debugPrint('Failed to delete temp input: $e');
       }
+    }
+    // ffmpeg 트랜스코딩 임시 파일 삭제
+    if (_transcodedTempPath != null) {
+      try {
+        final f = File(_transcodedTempPath!);
+        if (await f.exists()) {
+          await f.delete();
+          debugPrint('Deleted transcoded temp: $_transcodedTempPath');
+        }
+      } catch (e) {
+        debugPrint('Failed to delete transcoded temp: $e');
+      }
+      _transcodedTempPath = null;
     }
     _openedSrcPath = null;
     _openedImagePath = null;
@@ -511,23 +1006,121 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     vc.release();
 
     final preparedPath = await _prepareOpenPath(path);
-    final hasFfmpeg = await _ensureFfmpegForOpen();
-    final apiPreferences = hasFfmpeg
-        ? <int>[cv.CAP_FFMPEG, cv.CAP_MSMF, cv.CAP_ANY]
-        : <int>[cv.CAP_MSMF, cv.CAP_ANY, cv.CAP_FFMPEG];
 
-    for (final api in apiPreferences) {
-      final opened = vc.open(preparedPath, apiPreference: api);
-      debugPrint('open($preparedPath, api=$api) => $opened');
-      if (opened && vc.isOpened) {
-        _openedSrcPath = preparedPath;
-        return true;
+    // FFmpeg은 필수 - 반드시 확보해야 함
+    final hasFfmpeg = await _ensureFfmpegForOpen();
+    if (!hasFfmpeg) {
+      debugPrint('[CRITICAL] FFmpeg unavailable - video playback will fail!');
+      if (mounted) {
+        _showCenterToast(
+          'FFmpeg이 설치되지 않았습니다. 인터넷 연결 상태를 확인하고 다시 시도하세요.',
+          duration: const Duration(seconds: 5),
+          type: _ToastType.error,
+        );
+      }
+    }
+
+    // CAP_FFMPEG (api=1900) 는 dartcv4 에서 native crash 를 유발하므로 절대 사용하지 않음.
+    // MSMF / ANY 만 안전하게 시도.
+    for (final api in <int>[cv.CAP_MSMF, cv.CAP_ANY]) {
+      try {
+        debugPrint('[VideoOpen] Trying api=$api on: $preparedPath');
+        final opened = vc.open(preparedPath, apiPreference: api);
+        if (opened && vc.isOpened) {
+          final (testOk, testFrame) = await vc.readAsync();
+          debugPrint(
+            '[VideoOpen] api=$api frame test: ok=$testOk ${testFrame.width}x${testFrame.height}',
+          );
+          if (testOk && testFrame.width > 0 && testFrame.height > 0) {
+            testFrame.dispose();
+            vc.set(cv.CAP_PROP_POS_FRAMES, 0);
+            _openedSrcPath = preparedPath;
+            debugPrint(
+              '[VideoOpen] SUCCESS api=$api backend=${vc.getBackendName()}',
+            );
+            return true;
+          }
+          testFrame.dispose();
+          debugPrint('[VideoOpen] api=$api opened but frame read failed');
+        } else {
+          debugPrint('[VideoOpen] api=$api open returned: $opened');
+        }
+      } catch (e) {
+        debugPrint('[VideoOpen] api=$api exception: $e');
       }
       vc.release();
     }
 
+    // 직접 열기 실패 → ffmpeg.exe 로 MJPEG AVI 트랜스코딩 후 재시도
+    if (_ffmpegExeForOpen != null) {
+      debugPrint('[VideoOpen] Direct open failed. Transcoding via ffmpeg...');
+      final transcoded = await _transcodeToMjpegAvi(
+        preparedPath,
+        _ffmpegExeForOpen!,
+      );
+      if (transcoded != null) {
+        debugPrint('[VideoOpen] Transcoded to: $transcoded');
+        try {
+          final opened = vc.open(transcoded, apiPreference: cv.CAP_ANY);
+          if (opened && vc.isOpened) {
+            final (testOk, testFrame) = await vc.readAsync();
+            debugPrint(
+              '[VideoOpen] Transcoded frame test: ok=$testOk ${testFrame.width}x${testFrame.height}',
+            );
+            if (testOk && testFrame.width > 0 && testFrame.height > 0) {
+              testFrame.dispose();
+              vc.set(cv.CAP_PROP_POS_FRAMES, 0);
+              _openedSrcPath = transcoded;
+              _transcodedTempPath = transcoded;
+              debugPrint('[VideoOpen] SUCCESS via ffmpeg transcode');
+              return true;
+            }
+            testFrame.dispose();
+          }
+        } catch (e) {
+          debugPrint('[VideoOpen] Transcoded open exception: $e');
+        }
+        vc.release();
+        try {
+          File(transcoded).deleteSync();
+        } catch (_) {}
+      }
+    }
+
     _openedSrcPath = null;
+    debugPrint('[VideoOpen] FAILED - all methods exhausted');
     return false;
+  }
+
+  /// ffmpeg.exe 로 H.264 등 OpenCV 직접 열기 불가 영상을 MJPEG AVI 로 변환.
+  /// 성공 시 임시 파일 경로 반환, 실패 시 null.
+  Future<String?> _transcodeToMjpegAvi(String srcPath, String ffmpegExe) async {
+    try {
+      final tmpDir = await getTemporaryDirectory();
+      final outPath = p.join(
+        tmpDir.path,
+        'dcs_transcode_${DateTime.now().millisecondsSinceEpoch}.avi',
+      );
+      debugPrint('[Transcode] $srcPath → $outPath');
+      final result = await Process.run(ffmpegExe, [
+        '-y',
+        '-i', srcPath,
+        '-c:v', 'mjpeg',
+        '-q:v', '3',
+        '-an', // 오디오 제거 (재생은 media_kit 이 별도 처리)
+        outPath,
+      ]);
+      debugPrint('[Transcode] exit=${result.exitCode}');
+      if (result.exitCode != 0) {
+        debugPrint('[Transcode] stderr: ${result.stderr}');
+        return null;
+      }
+      if (!File(outPath).existsSync()) return null;
+      return outPath;
+    } catch (e) {
+      debugPrint('[Transcode] exception: $e');
+      return null;
+    }
   }
 
   bool _isSupportedVideoPath(String path) {
@@ -1741,7 +2334,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     }
   }
 
-  Future<void> _saveSettings() async {
+  Future<void> _saveSettings({bool showFeedback = true}) async {
     await APref.setData(AprefKey.VC_AUTO_CORRECTION, _autoCorrection);
     await APref.setData(AprefKey.VC_AUTO_STRENGTH, _autoStrength);
     await APref.setData(AprefKey.VC_CONTRAST, _contrast);
@@ -1764,19 +2357,15 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     );
     await APref.setData(AprefKey.VC_PREVIEW_MATCH_MODE, _previewMatchMode);
     await APref.setData(AprefKey.VC_AUDIO_VOLUME, _audioVolume);
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Settings saved.')));
+    if (mounted && showFeedback) {
+      _showCenterToast('Settings saved.', type: _ToastType.success);
     }
   }
 
   Future<void> _saveCurrentSceneAsPng() async {
     if (_openedSrcPath == null || src == null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('No frame to capture.')));
+      _showCenterToast('No frame to capture.', type: _ToastType.warning);
       return;
     }
     final wasPlayingBeforeCapture = _isPlaying;
@@ -1853,8 +2442,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         setState(() {
           _statusText = 'Failed to open source frame for PNG capture.';
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to open source video.')),
+        _showCenterToast(
+          'Failed to open source video.',
+          type: _ToastType.error,
         );
         return;
       }
@@ -1868,8 +2458,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         setState(() {
           _statusText = 'Failed to read source frame for PNG capture.';
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to read source frame.')),
+        _showCenterToast(
+          'Failed to read source frame.',
+          type: _ToastType.error,
         );
         return;
       }
@@ -1888,8 +2479,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         setState(() {
           _statusText = 'Failed to encode current frame as PNG.';
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to encode current frame.')),
+        _showCenterToast(
+          'Failed to encode current frame.',
+          type: _ToastType.error,
         );
         return;
       }
@@ -1905,9 +2497,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
         _lastSavedPath = outputPath;
         _statusText = 'PNG saved: $outputPath';
       });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('PNG saved: $outputPath')));
+      _showCenterToast('PNG saved: $outputPath', type: _ToastType.success);
     } finally {
       if (waitDialogShown && mounted) {
         final nav = Navigator.of(context, rootNavigator: true);
@@ -2213,6 +2803,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   @override
   void dispose() {
     _controlsHideTimer?.cancel();
+    _toastTimer?.cancel();
+    _toastOverlayEntry?.remove();
+    _toastOverlayEntry = null;
     unawaited(_killPlaybackIsolate());
     unawaited(_killSaveIsolate());
     unawaited(_deleteTempInputIfNeeded());
@@ -2220,6 +2813,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     vc.release();
     vw.release();
     _fullscreenFocusNode.dispose();
+    _presetNameController.dispose();
     _imageTransformController.dispose();
     _cachedRawPreviewFrame?.dispose();
     _cachedRawPreviewFrame = null;
@@ -2966,6 +3560,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   }
 
   Widget _buildControlPanel() {
+    final hasSavedPresets = _savedCorrectionPresets.isNotEmpty;
+    final currentPresetLabel = _selectedPresetName ?? 'Default';
+
     return Column(
       children: [
         const ListTile(
@@ -2974,7 +3571,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
             style: TextStyle(fontWeight: FontWeight.bold),
           ),
         ),
-        const Divider(height: 1),
         Expanded(
           child: ListView(
             padding: const EdgeInsets.only(bottom: 12),
@@ -3096,31 +3692,31 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                 },
                 onChangeEnd: (_) => _refreshPreviewFrame(),
               ),
-              SwitchListTile(
-                value: _localMaskEnabled,
-                title: const Text('Enable local mask (highlight protection)'),
-                onChanged: (v) {
-                  setState(() {
-                    _localMaskEnabled = v;
-                  });
-                  _pushRealtimeParamsToIsolate();
-                  _refreshPreviewFrame();
-                },
-              ),
-              _sliderTile(
-                title: 'Local mask strength',
-                value: _localMaskStrength,
-                min: 0,
-                max: 1,
-                divisions: 20,
-                label: _localMaskStrength.toStringAsFixed(2),
-                enabled: _localMaskEnabled,
-                onChanged: (v) {
-                  setState(() => _localMaskStrength = v);
-                  _pushRealtimeParamsToIsolate();
-                },
-                onChangeEnd: (_) => _refreshPreviewFrame(),
-              ),
+              // SwitchListTile(
+              //   value: _localMaskEnabled,
+              //   title: const Text('Enable local mask (highlight protection)'),
+              //   onChanged: (v) {
+              //     setState(() {
+              //       _localMaskEnabled = v;
+              //     });
+              //     _pushRealtimeParamsToIsolate();
+              //     _refreshPreviewFrame();
+              //   },
+              // ),
+              // _sliderTile(
+              //   title: 'Local mask strength',
+              //   value: _localMaskStrength,
+              //   min: 0,
+              //   max: 1,
+              //   divisions: 20,
+              //   label: _localMaskStrength.toStringAsFixed(2),
+              //   enabled: _localMaskEnabled,
+              //   onChanged: (v) {
+              //     setState(() => _localMaskStrength = v);
+              //     _pushRealtimeParamsToIsolate();
+              //   },
+              //   onChangeEnd: (_) => _refreshPreviewFrame(),
+              // ),
               _sliderTile(
                 title: 'Blue ocean tone',
                 value: _blueOceanTone,
@@ -3159,21 +3755,21 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                 },
                 onChangeEnd: (_) => _refreshPreviewFrame(),
               ),
-              _sliderTile(
-                title: 'Audio volume',
-                value: _audioVolume,
-                min: 0,
-                max: 1,
-                divisions: 20,
-                label: _audioVolume.toStringAsFixed(2),
-                onChanged: (v) {
-                  setState(() => _audioVolume = v);
-                  if (_audioEnabled) {
-                    unawaited(_audioPlayer.setVolume(v * 100.0));
-                  }
-                },
-                onChangeEnd: (_) {},
-              ),
+              // _sliderTile(
+              //   title: 'Audio volume',
+              //   value: _audioVolume,
+              //   min: 0,
+              //   max: 1,
+              //   divisions: 20,
+              //   label: _audioVolume.toStringAsFixed(2),
+              //   onChanged: (v) {
+              //     setState(() => _audioVolume = v);
+              //     if (_audioEnabled) {
+              //       unawaited(_audioPlayer.setVolume(v * 100.0));
+              //     }
+              //   },
+              //   onChangeEnd: (_) {},
+              // ),
               const Divider(height: 16),
               SwitchListTile(
                 value: _objectSelectionEnabled,
@@ -3188,44 +3784,73 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
             ],
           ),
         ),
+        const Divider(height: 1),
         Padding(
           padding: const EdgeInsets.all(16),
-          child: Row(
+          child: Column(
             children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _isSaving
-                      ? null
-                      : () async {
-                          setState(() {
-                            _previewMatchMode = true;
-                            _autoCorrection = true;
-                            _autoStrength = 0.62;
-                            _contrast = 1.2;
-                            _brightness = 6;
-                            _saturation = 1.12;
-                            _temperature = 10;
-                            _redRecovery = 1.05;
-                            _greenWaterAutoCorrection = false;
-                            _greenWaterStrength = 0.55;
-                            _localMaskEnabled = false;
-                            _localMaskStrength = 0.55;
-                            _blueOceanTone = 1.12;
-                            _particleReduction = false;
-                            _particleReductionStrength = 0.55;
-                          });
-                          await _refreshPreviewFrame();
-                        },
-                  child: const Text('Reset'),
-                ),
+              Row(
+                children: [
+                  const Text(
+                    'Current preset: ',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  Expanded(
+                    child: Text(
+                      currentPresetLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colorMain,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: !_isSaving ? _saveSettings : null,
-                  child: const Text('Save'),
-                ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.tonal(
+                      onPressed: _isSaving ? null : _showSavePresetDialog,
+                      child: _compactButtonLabel('Save'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: _isSaving ? null : _showLoadPresetDialog,
+                      child: _compactButtonLabel('Load'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _isSaving || !hasSavedPresets
+                          ? null
+                          : _confirmDeleteCurrentPreset,
+                      child: _compactButtonLabel('Delete'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _isSaving ? null : _confirmResetToDefault,
+                      child: _compactButtonLabel('Reset'),
+                    ),
+                  ),
+                ],
               ),
+              // const SizedBox(height: 12),
+              // Expanded(
+              //   child: ElevatedButton(
+              //     onPressed: !_isSaving
+              //         ? () => _saveSettings(showFeedback: true)
+              //         : null,
+              //     child: const Text('Save'),
+              //   ),
+              // ),
             ],
           ),
         ),
@@ -3299,13 +3924,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
           await searchImageOnGoogle(imagePath);
 
           // Show feedback
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Image uploaded to Google Images! Check browser...',
-              ),
-              duration: Duration(seconds: 2),
-            ),
+          _showCenterToast(
+            'Image uploaded to Google Images! Check browser...',
+            type: _ToastType.success,
           );
 
           // Open file explorer to show the saved image location
@@ -3319,11 +3940,9 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
             }
           }
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Clipboard copy failed. Opening Google Images...'),
-              duration: Duration(seconds: 2),
-            ),
+          _showCenterToast(
+            'Clipboard copy failed. Opening Google Images...',
+            type: _ToastType.warning,
           );
 
           // Try to open Google Images anyway and upload
@@ -3343,11 +3962,16 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     } catch (e) {
       debugPrint('Image selection error: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        _showCenterToast('Error: $e', type: _ToastType.error);
       }
     }
+  }
+
+  Widget _compactButtonLabel(String text) {
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Text(text, maxLines: 1, softWrap: false),
+    );
   }
 
   Widget _buildVideoSurface() {
@@ -4168,15 +4792,21 @@ Future<String?> _quickFindFfmpeg() async {
     try {
       final r = await Process.run(exe, ['-version'], runInShell: true);
       return r.exitCode == 0;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[ffmpeg] canRun($exe) failed: $e');
       return false;
     }
   }
 
-  // 1. Check system PATH
-  if (await canRun('ffmpeg')) return 'ffmpeg';
+  // 1. Check system PATH (환경변수에서)
+  debugPrint('[ffmpeg] Checking system PATH for ffmpeg...');
+  if (await canRun('ffmpeg')) {
+    debugPrint('[ffmpeg] Found in system PATH');
+    return 'ffmpeg';
+  }
 
   // 2. Check common local/bundled paths
+  debugPrint('[ffmpeg] Checking local bundled paths...');
   final exeDir = p.dirname(Platform.resolvedExecutable);
   final candidates = [
     p.join(Directory.current.path, 'ffmpeg.exe'),
@@ -4188,7 +4818,10 @@ Future<String?> _quickFindFfmpeg() async {
     p.join(exeDir, 'data', 'flutter_assets', 'assets', 'ffmpeg', 'ffmpeg.exe'),
   ];
   for (final c in candidates) {
-    if (File(c).existsSync() && await canRun(c)) return c;
+    if (File(c).existsSync()) {
+      debugPrint('[ffmpeg] Found at: $c');
+      if (await canRun(c)) return c;
+    }
   }
 
   // 3. Check previously installed portable ffmpeg
@@ -4201,12 +4834,14 @@ Future<String?> _quickFindFfmpeg() async {
         'bin',
         'ffmpeg.exe',
       );
+      debugPrint('[ffmpeg] Checking portable dir: $installedExe');
       if (File(installedExe).existsSync() && await canRun(installedExe)) {
+        debugPrint('[ffmpeg] Using existing portable FFmpeg');
         return installedExe;
       }
 
-      // 4. Auto-download portable ffmpeg (gyan.dev essentials build)
-      debugPrint('[ffmpeg] Not found. Attempting auto-install...');
+      // 4. Auto-download portable ffmpeg (with retry)
+      debugPrint('[ffmpeg] Not found anywhere. Starting auto-download...');
       final installBinDir = Directory(
         p.join(supportDir.path, 'ffmpeg_portable', 'bin'),
       );
@@ -4220,26 +4855,49 @@ Future<String?> _quickFindFfmpeg() async {
 
       final zipPath = p.join(tempRoot.path, 'ffmpeg.zip');
       final extractPath = p.join(tempRoot.path, 'extracted');
-      const url =
-          'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
+
+      // Multiple CDN fallbacks
+      const urls = [
+        'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip',
+        'https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-essentials_build.zip',
+      ];
 
       String psQuote(String v) => v.replaceAll("'", "''");
-      final script =
-          "\$ErrorActionPreference='Stop'; "
-          "\$ProgressPreference='SilentlyContinue'; "
-          "Invoke-WebRequest -Uri '${psQuote(url)}' -OutFile '${psQuote(zipPath)}'; "
-          "Expand-Archive -Path '${psQuote(zipPath)}' -DestinationPath '${psQuote(extractPath)}' -Force;";
 
-      final download = await Process.run('powershell', [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        script,
-      ], runInShell: true);
+      bool downloadSuccess = false;
+      for (final url in urls) {
+        try {
+          debugPrint('[ffmpeg] Trying download from: $url');
+          final script =
+              "\$ErrorActionPreference='Stop'; "
+              "\$ProgressPreference='SilentlyContinue'; "
+              "Invoke-WebRequest -Uri '${psQuote(url)}' -OutFile '${psQuote(zipPath)}' -TimeoutSec 300; "
+              "Expand-Archive -Path '${psQuote(zipPath)}' -DestinationPath '${psQuote(extractPath)}' -Force;";
 
-      if (download.exitCode != 0) {
-        debugPrint('[ffmpeg] Auto-install download failed: ${download.stderr}');
+          final download = await Process.run('powershell', [
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-Command',
+            script,
+          ], runInShell: true);
+
+          if (download.exitCode == 0) {
+            debugPrint('[ffmpeg] Download succeeded from: $url');
+            downloadSuccess = true;
+            break;
+          } else {
+            debugPrint(
+              '[ffmpeg] Download failed from $url: ${download.stderr}',
+            );
+          }
+        } catch (e) {
+          debugPrint('[ffmpeg] Exception downloading from $url: $e');
+        }
+      }
+
+      if (!downloadSuccess) {
+        debugPrint('[ffmpeg] All download attempts failed');
         return null;
       }
 

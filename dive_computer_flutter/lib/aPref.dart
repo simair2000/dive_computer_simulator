@@ -27,7 +27,9 @@ enum AprefKey {
   VC_PARTICLE_REDUCTION(false),
   VC_PARTICLE_REDUCTION_STRENGTH(0.55),
   VC_PREVIEW_MATCH_MODE(true),
-  VC_AUDIO_VOLUME(1.0);
+  VC_AUDIO_VOLUME(1.0),
+  VC_CORRECTION_PRESETS(const <String, dynamic>{}),
+  VC_LAST_PRESET_NAME('');
 
   final dynamic defValue;
   const AprefKey(this.defValue);
