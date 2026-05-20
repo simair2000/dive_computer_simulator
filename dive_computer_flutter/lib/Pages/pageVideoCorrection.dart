@@ -2275,6 +2275,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       final seekPosMs = _frameToDuration(target).inMilliseconds;
       _lastReceivedPosMs = seekPosMs;
       unawaited(_seekAudioToMs(seekPosMs));
+      _isolateSendPort?.send({'cmd': 'seek', 'frame': target});
       _seekingSlider = false;
       if (mounted) setState(() {});
       if (mounted && !_isSaving) await _playVideo();
@@ -3028,11 +3029,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
           return;
         }
         if (frameNum != null && _pendingSeekTargetFrame != null) {
-          final delta = (frameNum - _pendingSeekTargetFrame!).abs();
-          if (delta > 2) {
-            _isolateSendPort?.send({'cmd': 'ack'});
-            return;
-          }
           _pendingSeekTargetFrame = null;
           _seekingSlider = false;
         }
