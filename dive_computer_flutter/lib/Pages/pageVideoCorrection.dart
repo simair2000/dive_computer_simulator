@@ -111,8 +111,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
   double _redRecovery = 1.05;
   bool _greenWaterAutoCorrection = false;
   double _greenWaterStrength = 0.55;
-  bool _localMaskEnabled = false;
-  double _localMaskStrength = 0.55;
   double _blueOceanTone = 1.12;
   bool _particleReduction = false;
   double _particleReductionStrength = 0.55;
@@ -148,8 +146,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       AprefKey.VC_GREEN_WATER_AUTO_CORRECTION,
     );
     _greenWaterStrength = APref.getData(AprefKey.VC_GREEN_WATER_STRENGTH);
-    _localMaskEnabled = APref.getData(AprefKey.VC_LOCAL_MASK_ENABLED);
-    _localMaskStrength = APref.getData(AprefKey.VC_LOCAL_MASK_STRENGTH);
     _blueOceanTone = APref.getData(AprefKey.VC_BLUE_OCEAN_TONE);
     _particleReduction = APref.getData(AprefKey.VC_PARTICLE_REDUCTION);
     _particleReductionStrength = APref.getData(
@@ -206,8 +202,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       'redRecovery': _redRecovery,
       'greenWaterAutoCorrection': _greenWaterAutoCorrection,
       'greenWaterStrength': _greenWaterStrength,
-      'localMaskEnabled': _localMaskEnabled,
-      'localMaskStrength': _localMaskStrength,
       'blueOceanTone': _blueOceanTone,
       'particleReduction': _particleReduction,
       'particleReductionStrength': _particleReductionStrength,
@@ -242,14 +236,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     _greenWaterStrength = _asDouble(
       settings['greenWaterStrength'],
       _greenWaterStrength,
-    );
-    _localMaskEnabled = _asBool(
-      settings['localMaskEnabled'],
-      _localMaskEnabled,
-    );
-    _localMaskStrength = _asDouble(
-      settings['localMaskStrength'],
-      _localMaskStrength,
     );
     _blueOceanTone = _asDouble(settings['blueOceanTone'], _blueOceanTone);
     _particleReduction = _asBool(
@@ -449,8 +435,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     _redRecovery = 1.05;
     _greenWaterAutoCorrection = false;
     _greenWaterStrength = 0.55;
-    _localMaskEnabled = false;
-    _localMaskStrength = 0.55;
     _blueOceanTone = 1.12;
     _particleReduction = false;
     _particleReductionStrength = 0.55;
@@ -1315,10 +1299,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       _isPlaying = false;
       _isAnalysing = true;
       _statusText = 'Opening image...';
-      _playlistPaths
-        ..clear()
-        ..add(path);
-      _playlistIndex = 0;
     });
 
     await Future.delayed(Duration.zero);
@@ -1471,7 +1451,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     }
 
     if (_autoCorrection) {
-      final beforeAuto = cv.Mat.fromMat(working, copy: true);
       final channels = await cv.splitAsync(working);
       final b = channels[0];
       final g = channels[1];
@@ -1533,91 +1512,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       gAdj.dispose();
       rAdj.dispose();
       working = balanced;
-
-      if (_localMaskEnabled && !realtime) {
-        final hsvForMask = await cv.cvtColorAsync(beforeAuto, cv.COLOR_BGR2HSV);
-        final hsvMaskChannels = await cv.splitAsync(hsvForMask);
-        final valueChannel = hsvMaskChannels[2];
-        final thresholdHigh = (210.0 - _localMaskStrength * 45.0).clamp(
-          145.0,
-          220.0,
-        );
-        final thresholdLow =
-            (thresholdHigh - (20.0 + _localMaskStrength * 20.0)).clamp(
-              120.0,
-              210.0,
-            );
-
-        final (_, strongHighlightMask) = await cv.thresholdAsync(
-          valueChannel,
-          thresholdHigh,
-          255,
-          cv.THRESH_BINARY,
-        );
-        final (_, softHighlightMask) = await cv.thresholdAsync(
-          valueChannel,
-          thresholdLow,
-          255,
-          cv.THRESH_BINARY,
-        );
-        final transitionMask = await cv.subtractAsync(
-          softHighlightMask,
-          strongHighlightMask,
-        );
-        final invSoftMask = await cv.bitwiseNOTAsync(softHighlightMask);
-
-        final correctedCore = await cv.bitwiseANDAsync(
-          working,
-          working,
-          mask: invSoftMask,
-        );
-        final strongProtected = await cv.bitwiseANDAsync(
-          beforeAuto,
-          beforeAuto,
-          mask: strongHighlightMask,
-        );
-        final transitionCorrected = await cv.bitwiseANDAsync(
-          working,
-          working,
-          mask: transitionMask,
-        );
-        final transitionOriginal = await cv.bitwiseANDAsync(
-          beforeAuto,
-          beforeAuto,
-          mask: transitionMask,
-        );
-        final transitionMixed = await cv.addWeightedAsync(
-          transitionCorrected,
-          0.68,
-          transitionOriginal,
-          0.32,
-          0.0,
-        );
-        final corePlusTransition = await cv.addAsync(
-          correctedCore,
-          transitionMixed,
-        );
-        final locallyMasked = await cv.addAsync(
-          corePlusTransition,
-          strongProtected,
-        );
-
-        hsvForMask.dispose();
-        strongHighlightMask.dispose();
-        softHighlightMask.dispose();
-        transitionMask.dispose();
-        invSoftMask.dispose();
-        correctedCore.dispose();
-        strongProtected.dispose();
-        transitionCorrected.dispose();
-        transitionOriginal.dispose();
-        transitionMixed.dispose();
-        corePlusTransition.dispose();
-        working.dispose();
-        working = locallyMasked;
-      }
-
-      beforeAuto.dispose();
     }
 
     if (_greenWaterAutoCorrection) {
@@ -1886,6 +1780,12 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     }
   }
 
+  void _cacheRawPreviewFrame(cv.Mat rawPreview, int frameNum) {
+    _cachedRawPreviewFrame?.dispose();
+    _cachedRawPreviewFrame = cv.Mat.fromMat(rawPreview, copy: true);
+    _cachedRawPreviewFrameNum = frameNum;
+  }
+
   Future<void> _refreshPreviewFrame() async {
     if (_isSaving || _processingFrame) {
       return;
@@ -1932,26 +1832,44 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
 
     _processingFrame = true;
     try {
-      vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
-      final (ok, frame) = await vc.readAsync();
-      if (!ok || frame.width == 0 || frame.height == 0) {
-        frame.dispose();
-        return;
+      cv.Mat? frame;
+      cv.Mat? rawPreview;
+      var usedCachedRaw = false;
+
+      if (_cachedRawPreviewFrame != null &&
+          _cachedRawPreviewFrameNum == _lastReceivedFrameNum &&
+          !_cachedRawPreviewFrame!.isEmpty) {
+        rawPreview = cv.Mat.fromMat(_cachedRawPreviewFrame!, copy: true);
+        usedCachedRaw = true;
+      } else {
+        vc.set(cv.CAP_PROP_POS_FRAMES, _lastReceivedFrameNum.toDouble());
+        final (ok, decoded) = await vc.readAsync();
+        if (!ok || decoded.width == 0 || decoded.height == 0) {
+          decoded.dispose();
+          return;
+        }
+        frame = decoded;
+        rawPreview = await _resizeForPreview(decoded, realtime: true);
+        _cacheRawPreviewFrame(rawPreview, _lastReceivedFrameNum);
       }
 
-      final rawPreview = await _resizeForPreview(frame, realtime: true);
+      if (rawPreview == null) {
+        frame?.dispose();
+        return;
+      }
 
       final corrected = _previewMatchMode
           ? await _applyExportCorrections(rawPreview, _buildCorrectionParams())
           : await _applyCorrections(rawPreview, realtime: true);
       final image = await _cvMatToImage(corrected);
-      if (!identical(rawPreview, frame)) {
+      if (usedCachedRaw || (frame != null && !identical(rawPreview, frame))) {
         rawPreview.dispose();
       }
-      frame.dispose();
+      frame?.dispose();
       corrected.dispose();
 
       if (!mounted) {
+        image.dispose();
         return;
       }
       setState(() {
@@ -2218,6 +2136,7 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       final (ok, frame) = await vc.readAsync();
       if (ok && frame.width > 0) {
         final preview = await _resizeForPreview(frame, realtime: true);
+        _cacheRawPreviewFrame(preview, target);
         // Show a fast raw frame first, then refine with corrections asynchronously.
         final image = await _cvMatToImage(preview);
         if (!identical(preview, frame)) {
@@ -2348,8 +2267,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
       _greenWaterAutoCorrection,
     );
     await APref.setData(AprefKey.VC_GREEN_WATER_STRENGTH, _greenWaterStrength);
-    await APref.setData(AprefKey.VC_LOCAL_MASK_ENABLED, _localMaskEnabled);
-    await APref.setData(AprefKey.VC_LOCAL_MASK_STRENGTH, _localMaskStrength);
     await APref.setData(AprefKey.VC_BLUE_OCEAN_TONE, _blueOceanTone);
     await APref.setData(AprefKey.VC_PARTICLE_REDUCTION, _particleReduction);
     await APref.setData(
@@ -2860,8 +2777,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
     'greenWaterAutoCorrection': _greenWaterAutoCorrection,
     'greenWaterStrength': _greenWaterStrength,
     'blueOceanTone': _blueOceanTone,
-    'localMaskEnabled': _localMaskEnabled,
-    'localMaskStrength': _localMaskStrength,
     'particleReduction': _particleReduction,
     'particleReductionStrength': _particleReductionStrength,
     'previewMatchMode': _previewMatchMode,
@@ -3688,31 +3603,6 @@ class _PageVideoCorrectionState extends State<PageVideoCorrection> {
                 },
                 onChangeEnd: (_) => _refreshPreviewFrame(),
               ),
-              // SwitchListTile(
-              //   value: _localMaskEnabled,
-              //   title: const Text('Enable local mask (highlight protection)'),
-              //   onChanged: (v) {
-              //     setState(() {
-              //       _localMaskEnabled = v;
-              //     });
-              //     _pushRealtimeParamsToIsolate();
-              //     _refreshPreviewFrame();
-              //   },
-              // ),
-              // _sliderTile(
-              //   title: 'Local mask strength',
-              //   value: _localMaskStrength,
-              //   min: 0,
-              //   max: 1,
-              //   divisions: 20,
-              //   label: _localMaskStrength.toStringAsFixed(2),
-              //   enabled: _localMaskEnabled,
-              //   onChanged: (v) {
-              //     setState(() => _localMaskStrength = v);
-              //     _pushRealtimeParamsToIsolate();
-              //   },
-              //   onChangeEnd: (_) => _refreshPreviewFrame(),
-              // ),
               _sliderTile(
                 title: 'Blue ocean tone',
                 value: _blueOceanTone,
@@ -4579,12 +4469,6 @@ Future<cv.Mat> _applyRealtimeCorrections(
   if (autoCorrection) {
     final autoStrength = params['autoStrength'] as double? ?? 0.62;
     final redRecovery = params['redRecovery'] as double? ?? 1.05;
-    final localMaskEnabled = params['localMaskEnabled'] as bool? ?? false;
-    final localMaskStrength = params['localMaskStrength'] as double? ?? 0.55;
-
-    final beforeAuto = localMaskEnabled
-        ? cv.Mat.fromMat(working, copy: true)
-        : cv.Mat.empty();
 
     final channels = await cv.splitAsync(working);
     final b = channels[0];
@@ -4647,38 +4531,6 @@ Future<cv.Mat> _applyRealtimeCorrections(
     rAdj.dispose();
     if (!identical(working, inputFrame)) working.dispose();
     working = balanced;
-
-    if (localMaskEnabled && !beforeAuto.isEmpty) {
-      final gray = await cv.cvtColorAsync(beforeAuto, cv.COLOR_BGR2GRAY);
-      final threshold = (215.0 - localMaskStrength * 55.0).clamp(145.0, 220.0);
-      final (_, highlightMask) = await cv.thresholdAsync(
-        gray,
-        threshold,
-        255,
-        cv.THRESH_BINARY,
-      );
-      final invMask = await cv.bitwiseNOTAsync(highlightMask);
-      final correctedCore = await cv.bitwiseANDAsync(
-        working,
-        working,
-        mask: invMask,
-      );
-      final preservedHighlight = await cv.bitwiseANDAsync(
-        beforeAuto,
-        beforeAuto,
-        mask: highlightMask,
-      );
-      final mixed = await cv.addAsync(correctedCore, preservedHighlight);
-
-      gray.dispose();
-      highlightMask.dispose();
-      invMask.dispose();
-      correctedCore.dispose();
-      preservedHighlight.dispose();
-      working.dispose();
-      working = mixed;
-    }
-    beforeAuto.dispose();
   }
 
   final greenWaterAutoCorrection =
@@ -5109,17 +4961,11 @@ Future<cv.Mat> _applyExportCorrections(
     working = denoised;
   }
 
-  // Auto underwater correction with optional local mask
+  // Auto underwater correction
   final autoCorrection = params['autoCorrection'] as bool? ?? true;
   if (autoCorrection) {
     final autoStrength = params['autoStrength'] as double? ?? 0.62;
     final redRecovery = params['redRecovery'] as double? ?? 1.05;
-    final localMaskEnabled = params['localMaskEnabled'] as bool? ?? false;
-    final localMaskStrength = params['localMaskStrength'] as double? ?? 0.55;
-
-    final beforeAuto = localMaskEnabled
-        ? cv.Mat.fromMat(working, copy: true)
-        : cv.Mat.empty();
 
     final channels = await cv.splitAsync(working);
     final b = channels[0];
@@ -5182,38 +5028,6 @@ Future<cv.Mat> _applyExportCorrections(
     rAdj.dispose();
     if (!identical(working, inputFrame)) working.dispose();
     working = balanced;
-
-    if (localMaskEnabled && !beforeAuto.isEmpty) {
-      final gray = await cv.cvtColorAsync(beforeAuto, cv.COLOR_BGR2GRAY);
-      final threshold = (215.0 - localMaskStrength * 55.0).clamp(145.0, 220.0);
-      final (_, highlightMask) = await cv.thresholdAsync(
-        gray,
-        threshold,
-        255,
-        cv.THRESH_BINARY,
-      );
-      final invMask = await cv.bitwiseNOTAsync(highlightMask);
-      final correctedCore = await cv.bitwiseANDAsync(
-        working,
-        working,
-        mask: invMask,
-      );
-      final preservedHighlight = await cv.bitwiseANDAsync(
-        beforeAuto,
-        beforeAuto,
-        mask: highlightMask,
-      );
-      final mixed = await cv.addAsync(correctedCore, preservedHighlight);
-
-      gray.dispose();
-      highlightMask.dispose();
-      invMask.dispose();
-      correctedCore.dispose();
-      preservedHighlight.dispose();
-      working.dispose();
-      working = mixed;
-    }
-    beforeAuto.dispose();
   }
 
   // Green water correction
@@ -5309,7 +5123,24 @@ Future<cv.Mat> _applyExportCorrections(
       cv.Scalar(132.0, 255.0, 255.0, 0.0),
     );
     final blueMask = await cv.inRangeAsync(hsvForBlue, lowerBlue, upperBlue);
-    final invBlueMask = await cv.bitwiseNOTAsync(blueMask);
+    final featheredBlueMask = await cv.gaussianBlurAsync(blueMask, (5, 5), 0.0);
+    final (_, strongBlueMask) = await cv.thresholdAsync(
+      featheredBlueMask,
+      178,
+      255,
+      cv.THRESH_BINARY,
+    );
+    final (_, softBlueMask) = await cv.thresholdAsync(
+      featheredBlueMask,
+      42,
+      255,
+      cv.THRESH_BINARY,
+    );
+    final transitionBlueMask = await cv.subtractAsync(
+      softBlueMask,
+      strongBlueMask,
+    );
+    final invSoftBlueMask = await cv.bitwiseNOTAsync(softBlueMask);
 
     final bgrChannels = await cv.splitAsync(working);
     final b = bgrChannels[0];
@@ -5317,23 +5148,49 @@ Future<cv.Mat> _applyExportCorrections(
     final r = bgrChannels[2];
 
     final bBoosted = await cv.convertScaleAbsAsync(b, alpha: blueOceanTone);
-    final bBase = await cv.bitwiseANDAsync(b, b, mask: invBlueMask);
-    final bMaskedBoost = await cv.bitwiseANDAsync(
+    final bBase = await cv.bitwiseANDAsync(b, b, mask: invSoftBlueMask);
+    final bStrongBoost = await cv.bitwiseANDAsync(
       bBoosted,
       bBoosted,
-      mask: blueMask,
+      mask: strongBlueMask,
     );
-    final bFinal = await cv.addAsync(bBase, bMaskedBoost);
+    final bTransitionBoost = await cv.bitwiseANDAsync(
+      bBoosted,
+      bBoosted,
+      mask: transitionBlueMask,
+    );
+    final bTransitionBase = await cv.bitwiseANDAsync(
+      b,
+      b,
+      mask: transitionBlueMask,
+    );
+    final bTransitionMixed = await cv.addWeightedAsync(
+      bTransitionBoost,
+      0.70,
+      bTransitionBase,
+      0.30,
+      0.0,
+    );
+    final bBasePlusTransition = await cv.addAsync(bBase, bTransitionMixed);
+    final bFinal = await cv.addAsync(bBasePlusTransition, bStrongBoost);
     final blued = await cv.mergeAsync(cv.VecMat.fromList([bFinal, g, r]));
 
     hsvForBlue.dispose();
     lowerBlue.dispose();
     upperBlue.dispose();
     blueMask.dispose();
-    invBlueMask.dispose();
+    featheredBlueMask.dispose();
+    strongBlueMask.dispose();
+    softBlueMask.dispose();
+    transitionBlueMask.dispose();
+    invSoftBlueMask.dispose();
     bBoosted.dispose();
     bBase.dispose();
-    bMaskedBoost.dispose();
+    bStrongBoost.dispose();
+    bTransitionBoost.dispose();
+    bTransitionBase.dispose();
+    bTransitionMixed.dispose();
+    bBasePlusTransition.dispose();
     bFinal.dispose();
     b.dispose();
     g.dispose();
